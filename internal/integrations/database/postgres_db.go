@@ -4,11 +4,10 @@ import (
 	"fmt"
 	"time"
 
+	"backend/internal/config"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-	"backend/internal/config"
 )
-
 
 // NewPostgresDB creates exactly one database connection pool to be shared globally.
 func NewPostgresDB(cfg *config.Config) (*gorm.DB, error) {
@@ -27,7 +26,7 @@ func NewPostgresDB(cfg *config.Config) (*gorm.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	sqlDB.SetMaxIdleConns(cfg.Database.MaxIdleConns)
 	sqlDB.SetMaxOpenConns(cfg.Database.MaxOpenConns)
 	sqlDB.SetConnMaxLifetime(time.Hour)

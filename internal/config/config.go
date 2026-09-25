@@ -14,6 +14,7 @@ type Config struct {
 	Redis     Redis
 	Avanza    Avanza
 	RateLimit RateLimit
+	Auth      Auth
 }
 
 type Server struct {
@@ -25,12 +26,12 @@ type Server struct {
 }
 
 type Database struct {
-	Host     string
-	User     string
-	Password string
-	DBName   string
-	Port     string
-	SSLMode  string
+	Host         string
+	User         string
+	Password     string
+	DBName       string
+	Port         string
+	SSLMode      string
 	MaxIdleConns int
 	MaxOpenConns int
 }
@@ -49,6 +50,16 @@ type Avanza struct {
 type RateLimit struct {
 	RequestsPerSecond int
 	Burst             int
+}
+
+type Auth struct {
+	GoogleClientID     string
+	GoogleClientSecret string
+	GoogleRedirectURL  string
+	FrontendURL        string
+	SessionTTL         time.Duration
+	OAuthStateTTL      time.Duration
+	CookieSecure       bool
 }
 
 func Load(envFile string) (*Config, error) {
@@ -80,12 +91,12 @@ func Load(envFile string) (*Config, error) {
 		},
 
 		Database: Database{
-			Host:     getEnv("DB_HOST", "localhost"),
-			User:     getEnv("DB_USER", "postgres"),
-			Password: getEnv("DB_PASSWORD", "postgres"),
-			DBName:   getEnv("DB_NAME", "avanza"),
-			Port:     getEnv("DB_PORT", "5432"),
-			SSLMode:  getEnv("DB_SSLMODE", "disable"),
+			Host:         getEnv("DB_HOST", "localhost"),
+			User:         getEnv("DB_USER", "postgres"),
+			Password:     getEnv("DB_PASSWORD", "postgres"),
+			DBName:       getEnv("DB_NAME", "avanza"),
+			Port:         getEnv("DB_PORT", "5432"),
+			SSLMode:      getEnv("DB_SSLMODE", "disable"),
 			MaxIdleConns: getInt("DB_MAX_IDLE_CONNS", 10),
 			MaxOpenConns: getInt("DB_MAX_OPEN_CONNS", 100),
 		},
@@ -116,6 +127,16 @@ func Load(envFile string) (*Config, error) {
 				"RATE_LIMIT_BURST",
 				20,
 			),
+		},
+
+		Auth: Auth{
+			GoogleClientID:     getEnv("GOOGLE_CLIENT_ID", ""),
+			GoogleClientSecret: getEnv("GOOGLE_CLIENT_SECRET", ""),
+			GoogleRedirectURL:  getEnv("GOOGLE_REDIRECT_URL", "http://localhost:8080/auth/callback"),
+			FrontendURL:        getEnv("FRONTEND_URL", "http://localhost:3000"),
+			SessionTTL:         getDuration("AUTH_SESSION_TTL", 24*time.Hour),
+			OAuthStateTTL:      getDuration("AUTH_OAUTH_STATE_TTL", 15*time.Minute),
+			CookieSecure:       getBool("AUTH_COOKIE_SECURE", false),
 		},
 	}, nil
 }
@@ -158,5 +179,18 @@ func getDuration(
 		return defaultValue
 	}
 
+	return result
+}
+
+func getBool(key string, defaultValue bool) bool {
+	value := getEnv(key, "")
+	if value == "" {
+		return defaultValue
+	}
+
+	result, err := strconv.ParseBool(value)
+	if err != nil {
+		return defaultValue
+	}
 	return result
 }

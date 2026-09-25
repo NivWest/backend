@@ -1,10 +1,10 @@
 package handlers
 
 import (
-	"net/http"
-	"github.com/gin-gonic/gin"
-	"backend/internal/services"
 	"backend/internal/middleware"
+	"backend/internal/services"
+	"github.com/gin-gonic/gin"
+	"net/http"
 )
 
 type StockHandler struct {
@@ -93,7 +93,6 @@ func (h *StockHandler) Details(c *gin.Context) {
 		result,
 	)
 }
-
 
 func (h *StockHandler) Quote(c *gin.Context) {
 	orderbookID := c.Query("orderbookID")

@@ -18,8 +18,6 @@ const (
 	searchPath = "/_api/search/filtered-search"
 )
 
-
-
 type Client struct {
 	httpClient *http.Client
 }
@@ -98,9 +96,9 @@ func (c *Client) Search(
 		SearchFilter: SearchFilter{
 			Types: []string{},
 		},
-		ScreenSize:     "DESKTOP",
-		OriginPath:     "/start",
-		OriginPlatform: "PWA",
+		ScreenSize:      "DESKTOP",
+		OriginPath:      "/start",
+		OriginPlatform:  "PWA",
 		SearchSessionID: uuid.NewString(),
 		Pagination: Pagination{
 			From: 0,
@@ -139,7 +137,6 @@ func (c *Client) GetPriceChart(
 		nil,
 	)
 }
-
 
 func (c *Client) GetStockDetails(
 	ctx context.Context,

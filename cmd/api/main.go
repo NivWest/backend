@@ -1,9 +1,9 @@
 package main
 
 import (
+	"backend/internal/app"
 	"backend/internal/config"
 	"github.com/gin-gonic/gin"
-	"backend/internal/app"
 	"log"
 	"net/http"
 )
@@ -32,6 +32,10 @@ func newHTTPServer(app *app.App) (*gin.Engine, error) {
 		engine,
 		app.StockHandler,
 		app.UserHandler,
+		app.AuthHandler,
+		app.PortfolioHandler,
+		app.OrderHandler,
+		app.WatchlistHandler,
 	)
 
 	return engine, nil
