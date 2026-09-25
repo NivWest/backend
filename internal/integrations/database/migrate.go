@@ -3,20 +3,25 @@
 package database
 
 import (
-    "fmt"
+	"fmt"
 
-    "backend/internal/models"
-    "gorm.io/gorm"
+	"backend/internal/models"
+	"gorm.io/gorm"
 )
 
 func Migrate(db *gorm.DB) error {
-    if err := db.AutoMigrate(
-        &models.User{},
-        &models.Stock{},
-        &models.Position{},
-    ); err != nil {
-        return fmt.Errorf("auto migrate: %w", err)
-    }
+	if err := db.AutoMigrate(
+		&models.User{},
+		&models.Stock{},
+		&models.Position{},
+		&models.Session{},
+		&models.OAuthState{},
+		&models.Transaction{},
+		&models.Watchlist{},
+		&models.WatchlistItem{},
+	); err != nil {
+		return fmt.Errorf("auto migrate: %w", err)
+	}
 
-    return nil
+	return nil
 }

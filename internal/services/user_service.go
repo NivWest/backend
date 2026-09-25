@@ -3,12 +3,12 @@ package services
 import (
 	"context"
 
-	"backend/internal/models"
 	"backend/internal/domain"
+	"backend/internal/models"
 )
 
 type UserService struct {
-	repo  domain.UserRepository
+	repo domain.UserRepository
 }
 
 func NewUserService(repo domain.UserRepository) *UserService {
@@ -28,4 +28,8 @@ func (s *UserService) GetUserByID(ctx context.Context, id uint) (*models.User, e
 func (s *UserService) CreateUser(ctx context.Context, user *models.User) error {
 	// authenticate user logic can be added here if needed
 	return s.repo.Create(ctx, user)
+}
+
+func (s *UserService) DeleteUser(ctx context.Context, id uint) error {
+	return s.repo.Delete(ctx, id)
 }
