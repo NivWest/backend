@@ -1,0 +1,20 @@
+name: Trigger Jules Agent from Jira
+
+on:
+  repository_dispatch:
+    types: [create_jira_issue]
+
+permissions:
+  issues: write
+
+jobs:
+  create_issue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create GitHub Issue with Label
+        uses: imjohnbo/issue-bot@v3
+        with:
+          title: "${{ github.event.client_payload.key }}: ${{ github.event.client_payload.summary }}"
+          body: "${{ github.event.client_payload.description }}\n\n*Linked Jira Ticket: ${{ github.event.client_payload.url }}*"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
