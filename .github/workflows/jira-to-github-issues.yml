@@ -18,3 +18,4 @@ jobs:
           body: "${{ github.event.client_payload.description }}\n\n*Linked Jira Ticket: ${{ github.event.client_payload.url }}*"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
