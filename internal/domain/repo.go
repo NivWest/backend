@@ -16,7 +16,7 @@ type WatchlistItemRequest struct {
 
 type OrderRequest struct {
 	Symbol   string  `json:"symbol" binding:"required"`
-	Name     string  `json:"name"` // Used if stock doesn't exist in DB yet
+	Name     string  `json:"name"`                                   // Used if stock doesn't exist in DB yet
 	Type     string  `json:"type" binding:"required,oneof=BUY SELL"` // BUY, SELL
 	Quantity float64 `json:"quantity" binding:"required,gt=0"`
 }
@@ -32,10 +32,10 @@ type WatchlistRepository interface {
 	Create(ctx context.Context, userID uint, name string) (*models.Watchlist, error)
 	GetUserWatchlists(ctx context.Context, userID uint) ([]models.Watchlist, error)
 	Delete(ctx context.Context, userID uint, watchlistID uint) error
-	
+
 	AddItem(ctx context.Context, userID uint, watchlistID uint, stockID uint) error
-	RemoveItem(ctx context.Context, userID uint, watchlistID uint, stockID uint) error
-	
+	RemoveItem(ctx context.Context, userID uint, watchlistID uint, symbol string) error
+
 	EnsureStock(ctx context.Context, symbol, name string) (*models.Stock, error)
 }
 

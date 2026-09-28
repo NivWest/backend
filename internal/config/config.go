@@ -72,7 +72,7 @@ func Load(envFile string) (*Config, error) {
 	return &Config{
 		Server: Server{
 			Host: getEnv("SERVER_HOST", "0.0.0.0"),
-			Port: getEnv("SERVER_PORT", "8080"),
+			Port: getEnv("SERVER_PORT", "8081"),
 
 			ReadTimeout: getDuration(
 				"SERVER_READ_TIMEOUT",

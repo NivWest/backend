@@ -34,11 +34,11 @@ func NewAuthService(users domain.UserRepository, auth domain.AuthRepository, cfg
 	return &AuthService{
 		users: users, auth: auth,
 		google: oauth2.Config{
-			ClientID: cfg.Auth.GoogleClientID, 
+			ClientID:     cfg.Auth.GoogleClientID,
 			ClientSecret: cfg.Auth.GoogleClientSecret,
-			RedirectURL: cfg.Auth.GoogleRedirectURL,
-			Endpoint:    oauth2.Endpoint{AuthURL: "https://accounts.google.com/o/oauth2/auth", TokenURL: "https://oauth2.googleapis.com/token"},
-			Scopes:      []string{"openid", "email", "profile"},
+			RedirectURL:  cfg.Auth.GoogleRedirectURL,
+			Endpoint:     oauth2.Endpoint{AuthURL: "https://accounts.google.com/o/oauth2/auth", TokenURL: "https://oauth2.googleapis.com/token"},
+			Scopes:       []string{"openid", "email", "profile"},
 		},
 		stateTTL: cfg.Auth.OAuthStateTTL, sessionTTL: cfg.Auth.SessionTTL,
 	}

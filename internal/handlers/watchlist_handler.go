@@ -26,12 +26,12 @@ func (h *WatchlistHandler) Register(v1 *gin.RouterGroup) {
 	lists := v1.Group("/watchlists")
 	lists.Use(middleware.RequireAuth(h.auth))
 
-	lists.POST("/", h.Create)
-	lists.GET("/", h.List)
+	lists.POST("", h.Create)
+	lists.GET("", h.List)
 	lists.DELETE("/:id", h.Delete)
-	
+
 	lists.POST("/:id/items", h.AddItem)
-	lists.DELETE("/:id/items/:stockId", h.RemoveItem)
+	lists.DELETE("/:id/items/:symbol", h.RemoveItem)
 }
 
 func (h *WatchlistHandler) Create(c *gin.Context) {
@@ -103,13 +103,13 @@ func (h *WatchlistHandler) RemoveItem(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid watchlist id"})
 		return
 	}
-	stockId, err := strconv.ParseUint(c.Param("stockId"), 10, 32)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid stock id"})
+	symbol := c.Param("symbol")
+	if symbol == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid stock symbol"})
 		return
 	}
 
-	if err := h.service.RemoveItem(c.Request.Context(), user.ID, uint(wlId), uint(stockId)); err != nil {
+	if err := h.service.RemoveItem(c.Request.Context(), user.ID, uint(wlId), symbol); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

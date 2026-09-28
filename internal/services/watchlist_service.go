@@ -1,9 +1,9 @@
 package services
 
 import (
-	"context"
 	"backend/internal/domain"
 	"backend/internal/models"
+	"context"
 )
 
 type WatchlistService struct {
@@ -34,6 +34,6 @@ func (s *WatchlistService) AddItem(ctx context.Context, userID uint, watchlistID
 	return s.repo.AddItem(ctx, userID, watchlistID, stock.ID)
 }
 
-func (s *WatchlistService) RemoveItem(ctx context.Context, userID uint, watchlistID uint, stockID uint) error {
-	return s.repo.RemoveItem(ctx, userID, watchlistID, stockID)
+func (s *WatchlistService) RemoveItem(ctx context.Context, userID uint, watchlistID uint, symbol string) error {
+	return s.repo.RemoveItem(ctx, userID, watchlistID, symbol)
 }

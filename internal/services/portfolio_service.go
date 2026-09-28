@@ -39,11 +39,11 @@ type DashboardPosition struct {
 }
 
 type PortfolioDashboard struct {
-	Balance          float64             `json:"balance"`
-	TotalValue       float64             `json:"total_value"`
-	TotalUnrealized  float64             `json:"total_unrealized"`
-	Positions        []DashboardPosition `json:"positions"`
-	TopMovers        []DashboardPosition `json:"top_movers"`
+	Balance         float64             `json:"balance"`
+	TotalValue      float64             `json:"total_value"`
+	TotalUnrealized float64             `json:"total_unrealized"`
+	Positions       []DashboardPosition `json:"positions"`
+	TopMovers       []DashboardPosition `json:"top_movers"`
 }
 
 type avanzaQuote struct {
@@ -72,14 +72,14 @@ func (s *PortfolioService) GetDashboard(ctx context.Context, userID uint) (*Port
 
 	for _, pos := range positions {
 		wg.Add(1)
-		go func(position struct{ 
+		go func(position struct {
 			StockName string
-			Symbol string
-			Quantity float64
-			AvgPrice float64 
+			Symbol    string
+			Quantity  float64
+			AvgPrice  float64
 		}) {
 			defer wg.Done()
-			
+
 			dp := DashboardPosition{
 				StockName: position.StockName,
 				Symbol:    position.Symbol,
@@ -96,10 +96,10 @@ func (s *PortfolioService) GetDashboard(ctx context.Context, userID uint) (*Port
 					dp.ChangePercent = quote.ChangePercent
 				}
 			}
-			
+
 			// Fallback if quote fails
 			if dp.CurrentPrice == 0 {
-				dp.CurrentPrice = dp.AvgPrice 
+				dp.CurrentPrice = dp.AvgPrice
 			}
 
 			dp.Value = dp.CurrentPrice * dp.Quantity
@@ -108,7 +108,12 @@ func (s *PortfolioService) GetDashboard(ctx context.Context, userID uint) (*Port
 			dashboard.Positions = append(dashboard.Positions, dp)
 			mu.Unlock()
 
-		}(struct{StockName string; Symbol string; Quantity float64; AvgPrice float64}{
+		}(struct {
+			StockName string
+			Symbol    string
+			Quantity  float64
+			AvgPrice  float64
+		}{
 			StockName: pos.Stock.Name,
 			Symbol:    pos.Stock.Symbol,
 			Quantity:  pos.Quantity,
