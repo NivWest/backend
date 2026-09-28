@@ -25,7 +25,7 @@ func (h *OrderHandler) Register(v1 *gin.RouterGroup) {
 	orders := v1.Group("/orders")
 	orders.Use(middleware.RequireAuth(h.auth))
 
-	orders.POST("/", h.PlaceOrder)
+	orders.POST("", h.PlaceOrder)
 }
 
 func (h *OrderHandler) PlaceOrder(c *gin.Context) {

@@ -73,16 +73,21 @@ func (r *watchlistRepo) AddItem(ctx context.Context, userID uint, watchlistID ui
 		WatchlistID: watchlistID,
 		StockID:     stockID,
 	}
-	
+
 	// Ignore if already exists (using FirstOrCreate)
 	return r.db.WithContext(ctx).Where("watchlist_id = ? AND stock_id = ?", watchlistID, stockID).FirstOrCreate(&item).Error
 }
 
-func (r *watchlistRepo) RemoveItem(ctx context.Context, userID uint, watchlistID uint, stockID uint) error {
+func (r *watchlistRepo) RemoveItem(ctx context.Context, userID uint, watchlistID uint, symbol string) error {
 	var wl models.Watchlist
 	if err := r.db.WithContext(ctx).Select("id").Where("id = ? AND user_id = ?", watchlistID, userID).First(&wl).Error; err != nil {
 		return errors.New("watchlist not found or unauthorized")
 	}
 
-	return r.db.WithContext(ctx).Where("watchlist_id = ? AND stock_id = ?", watchlistID, stockID).Delete(&models.WatchlistItem{}).Error
+	var stock models.Stock
+	if err := r.db.WithContext(ctx).Where("symbol = ?", symbol).First(&stock).Error; err != nil {
+		return errors.New("stock not found")
+	}
+
+	return r.db.WithContext(ctx).Where("watchlist_id = ? AND stock_id = ?", watchlistID, stock.ID).Delete(&models.WatchlistItem{}).Error
 }
