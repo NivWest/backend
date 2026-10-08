@@ -30,32 +30,17 @@ jobs:
             ## Instructions
 
             1. **Read the issue carefully** and understand the full requirement.
-            2. **Determine the type of change:**
-               - Bug fix → branch from `main` as `jules/fix/<issue-number>-<short-slug>`
-               - New feature → branch from `main` as `jules/feat/<issue-number>-<short-slug>`
-               - Refactor → branch from `main` as `jules/refactor/<issue-number>-<short-slug>`
-               - Chore/docs → branch from `main` as `jules/chore/<issue-number>-<short-slug>`
-            3. **Implement the change** following the existing project structure:
-               - `cmd/api/` — HTTP server entry point
-               - `internal/app/` — Application wiring and lifecycle
-               - `internal/config/` — Environment configuration
-               - `internal/domain/` — Domain contracts and errors
-               - `internal/handlers/` — HTTP handlers and route registration
-               - `internal/integrations/` — PostgreSQL and Avanza integrations
-               - `internal/middleware/` — HTTP middleware
-               - `internal/models/` — GORM persistence models
-               - `internal/repository/` — Database repositories
-               - `internal/services/` — Application services
-            4. **Write clean, atomic commits** with conventional commit messages:
-               - `feat(scope): description` for features
-               - `fix(scope): description` for fixes
-               - `refactor(scope): description` for refactors
-               - `docs(scope): description` for docs
-               - `test(scope): description` for tests
-            5. **Run `gofmt -w cmd internal` and `go build ./cmd/api`** to ensure the code compiles.
-            6. **Open a pull request** targeting `main` with:
+            2. **Read the documentation** in `AGENTS.md`, `doc/architecture.md`, and `doc/workflow.md` before making changes. Ensure you adhere to all architectural patterns, dependency inversion rules, and testing guidelines.
+            3. **Determine the type of change:**
+               - Bug fix → branch from `dev` as `jules/fix/<issue-number>-<short-slug>`
+               - New feature → branch from `dev` as `jules/feat/<issue-number>-<short-slug>`
+               - Refactor → branch from `dev` as `jules/refactor/<issue-number>-<short-slug>`
+               - Chore/docs → branch from `dev` as `jules/chore/<issue-number>-<short-slug>`
+            4. **Implement the change and tests**. Verify that your code is covered by tests using in-memory fakes.
+            5. **Write clean, atomic commits** with conventional commit messages (e.g. `feat(scope): ...`, `fix(scope): ...`).
+            6. **Run `gofmt -w cmd internal`, `go test ./...`, and `go build ./cmd/api`** to ensure the code passes checks.
+            7. **Open a pull request** targeting `dev` with:
                - A clear title prefixed with the conventional type (e.g., `feat(stocks): add watchlist endpoint`)
                - A description summarising what was changed and why
                - Reference `Closes #${{ github.event.issue.number }}` in the PR body
-               - Request review from the team
-          starting_branch: main
+          starting_branch: dev
