@@ -24,14 +24,17 @@ jobs:
           starting_branch: ${{ github.head_ref || github.ref_name }}
           prompt: |
             You are an expert Go reviewer working on the NivWest backend.
-            Review the code in the current branch against the guidelines in `AGENTS.md`.
+            Review the code in the current branch against the guidelines in `AGENTS.md`, `doc/architecture.md`, and `doc/workflow.md`.
 
             Focus specifically on:
             1. Architecture: Ensure Handlers don't contain business logic and Services don't depend on concrete GORM repositories.
             2. Concurrency: Verify that any database operation altering balances or positions uses a transaction with row-level locking (`clause.Locking{Strength: "UPDATE"}`).
             3. Error Handling: Ensure errors are mapped to appropriate HTTP status codes.
-            4. Testing: Ensure all new services, handlers, and logic are thoroughly unit tested using our in-memory fakes from `internal/testutil`.
+            4. Testing: Ensure all new services, handlers, and logic are thoroughly unit tested. 
+               - **IMPORTANT**: Instruct Jules to write tests if they are missing for the PR changes. 
+               - Confirm that all tests are passing.
+               - Adhere to the architecture and testing decisions found in `doc/workflow.md` (use in-memory fakes from `internal/testutil`).
 
-            If you find any violations of the architecture, coding standards, or missing tests for new logic, FIX THEM directly.
+            If you find any violations of the architecture, coding standards, or missing tests for new logic, FIX THEM directly in the code and push the commit.
             Do not leave comments on the PR. Make the necessary code changes to bring the branch into compliance.
-            If the code looks perfect and follows all rules in `AGENTS.md`, do nothing and exit successfully.
+            If the code looks perfect and follows all rules in the documentation, do nothing and exit successfully.
