@@ -1,0 +1,37 @@
+name: Jules PR Reviewer
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, synchronize]
+    branches:
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Invoke Jules for PR Review
+        uses: google-labs-code/jules-invoke@v1
+        with:
+          jules_api_key: ${{ secrets.JULES_API_KEY }}
+          starting_branch: ${{ github.head_ref || github.ref_name }}
+          prompt: |
+            You are an expert Go reviewer working on the NivWest backend.
+            Review the code in the current branch against the guidelines in `AGENTS.md`.
+
+            Focus specifically on:
+            1. Architecture: Ensure Handlers don't contain business logic and Services don't depend on concrete GORM repositories.
+            2. Concurrency: Verify that any database operation altering balances or positions uses a transaction with row-level locking (`clause.Locking{Strength: "UPDATE"}`).
+            3. Error Handling: Ensure errors are mapped to appropriate HTTP status codes.
+            4. Testing: Ensure all new services, handlers, and logic are thoroughly unit tested using our in-memory fakes from `internal/testutil`.
+
+            If you find any violations of the architecture, coding standards, or missing tests for new logic, FIX THEM directly.
+            Do not leave comments on the PR. Make the necessary code changes to bring the branch into compliance.
+            If the code looks perfect and follows all rules in `AGENTS.md`, do nothing and exit successfully.

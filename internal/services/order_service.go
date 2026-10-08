@@ -13,19 +13,22 @@ import (
 type OrderService struct {
 	repo          domain.OrderRepository
 	stockProvider domain.StockProvider
+	// sleep simulates execution latency. It is a field so tests can replace it.
+	sleep func(time.Duration)
 }
 
 func NewOrderService(repo domain.OrderRepository, stockProvider domain.StockProvider) *OrderService {
 	return &OrderService{
 		repo:          repo,
 		stockProvider: stockProvider,
+		sleep:         time.Sleep,
 	}
 }
 
 func (s *OrderService) ExecuteOrder(ctx context.Context, userID uint, req domain.OrderRequest) error {
 	// 1. Friction Logic: Artificial Latency (50-500ms)
 	latency := time.Duration(rand.Intn(450)+50) * time.Millisecond
-	time.Sleep(latency)
+	s.sleep(latency)
 
 	// 2. Fetch real-time quote
 	quoteBytes, err := s.stockProvider.GetStockQuote(ctx, req.Symbol)

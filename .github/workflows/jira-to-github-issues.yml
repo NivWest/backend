@@ -16,6 +16,7 @@ jobs:
         with:
           title: "${{ github.event.client_payload.key }}: ${{ github.event.client_payload.summary }}"
           body: "${{ github.event.client_payload.description }}\n\n*Linked Jira Ticket: ${{ github.event.client_payload.url }}*"
+          labels: "Jules"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           
