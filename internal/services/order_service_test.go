@@ -38,7 +38,7 @@ func TestOrderService_ExecuteOrder_PricingAndSlippage(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := &testutil.OrderRepo{}
-			provider := &testutil.StockProvider{GetStockQuoteFn: testutil.QuoteJSON(`{"lastPrice":200}`)}
+			provider := &testutil.StockProvider{GetStockQuoteFn: testutil.QuoteJSON(`{"last":200}`)}
 			svc := newTestOrderService(repo, provider)
 
 			err := svc.ExecuteOrder(context.Background(), 7, domain.OrderRequest{
@@ -66,7 +66,7 @@ func TestOrderService_ExecuteOrder_PricingAndSlippage(t *testing.T) {
 
 func TestOrderService_ExecuteOrder_SimulatesLatency(t *testing.T) {
 	var slept time.Duration
-	svc := NewOrderService(&testutil.OrderRepo{}, &testutil.StockProvider{GetStockQuoteFn: testutil.QuoteJSON(`{"lastPrice":10}`)})
+	svc := NewOrderService(&testutil.OrderRepo{}, &testutil.StockProvider{GetStockQuoteFn: testutil.QuoteJSON(`{"last":10}`)})
 	svc.sleep = func(d time.Duration) { slept = d }
 
 	if err := svc.ExecuteOrder(context.Background(), 1, domain.OrderRequest{Symbol: "X", Type: "BUY", Quantity: 1}); err != nil {
@@ -101,19 +101,19 @@ func TestOrderService_ExecuteOrder_Errors(t *testing.T) {
 		},
 		{
 			name:    "quote price is zero",
-			quote:   testutil.QuoteJSON(`{"lastPrice":0}`),
+			quote:   testutil.QuoteJSON(`{"last":0}`),
 			repo:    &testutil.OrderRepo{},
 			wantErr: "invalid stock price received",
 		},
 		{
 			name:    "quote price is negative",
-			quote:   testutil.QuoteJSON(`{"lastPrice":-5}`),
+			quote:   testutil.QuoteJSON(`{"last":-5}`),
 			repo:    &testutil.OrderRepo{},
 			wantErr: "invalid stock price received",
 		},
 		{
 			name:  "stock registration fails",
-			quote: testutil.QuoteJSON(`{"lastPrice":10}`),
+			quote: testutil.QuoteJSON(`{"last":10}`),
 			repo: &testutil.OrderRepo{EnsureStockFn: func(context.Context, string, string) (*models.Stock, error) {
 				return nil, errors.New("db down")
 			}},
@@ -121,7 +121,7 @@ func TestOrderService_ExecuteOrder_Errors(t *testing.T) {
 		},
 		{
 			name:  "transaction error is propagated",
-			quote: testutil.QuoteJSON(`{"lastPrice":10}`),
+			quote: testutil.QuoteJSON(`{"last":10}`),
 			repo: &testutil.OrderRepo{ExecuteTransactionFn: func(context.Context, testutil.ExecutedOrder) error {
 				return repoErr
 			}},
@@ -142,4 +142,3 @@ func TestOrderService_ExecuteOrder_Errors(t *testing.T) {
 		})
 	}
 }
-

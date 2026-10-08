@@ -92,7 +92,7 @@ func expectErrorBody(t *testing.T, w *httptest.ResponseRecorder) {
 // ---------------------------------------------------------------------------
 
 func TestOrderHandler_PlaceOrder(t *testing.T) {
-	quote := testutil.QuoteJSON(`{"lastPrice":100}`)
+	quote := testutil.QuoteJSON(`{"last":100}`)
 
 	t.Run("requires authentication", func(t *testing.T) {
 		svc := services.NewOrderService(&testutil.OrderRepo{}, &testutil.StockProvider{GetStockQuoteFn: quote})
@@ -323,4 +323,3 @@ func TestPortfolioHandler_Dashboard(t *testing.T) {
 		}
 	})
 }
-

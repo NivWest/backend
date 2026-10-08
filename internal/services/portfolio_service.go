@@ -47,7 +47,7 @@ type PortfolioDashboard struct {
 }
 
 type avanzaQuote struct {
-	LastPrice     float64 `json:"lastPrice"`
+	LastPrice     float64 `json:"last"`
 	ChangePercent float64 `json:"changePercent"`
 }
 
