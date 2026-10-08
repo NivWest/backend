@@ -69,3 +69,4 @@ Allowed scopes: `auth`, `order`, `portfolio`, `stock`, `user`, `watchlist`, `con
   - Brief summary of changes and design decisions.
   - Linked issue reference: `Closes #<issue-number>`.
   - Confirmation of passing checks (`gofmt`, `go test ./...`, `go build ./cmd/api`).
+

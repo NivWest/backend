@@ -116,3 +116,4 @@ type Registrar interface {
 - **Sensitive Data:** Never return internal session tokens or password hashes in API JSON responses.
 - **ID Parsing:** Always validate URL path identifiers using `strconv.ParseUint`.
 - **Avanza Upstream Scraping:** Rate limiting must always remain active on `/stocks` routes to prevent IP bans.
+

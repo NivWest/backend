@@ -38,3 +38,4 @@ jobs:
             If you find any violations of the architecture, coding standards, or missing tests for new logic, FIX THEM directly in the code and push the commit.
             Do not leave comments on the PR. Make the necessary code changes to bring the branch into compliance.
             If the code looks perfect and follows all rules in the documentation, do nothing and exit successfully.
+
