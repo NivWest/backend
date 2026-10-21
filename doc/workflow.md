@@ -46,7 +46,7 @@ When tasked with adding a new entity or endpoint, follow this sequence:
 Automated agents (e.g. Jules, CI bots) and contributors must follow these Git standards:
 
 ### 3.1. Branch Naming
-Branch directly from `main`:
+Branch directly from `dev` (`main` is the release branch):
 - Bug fixes: `jules/fix/<issue-number>-<short-slug>` or `fix/<short-slug>`
 - Features: `jules/feat/<issue-number>-<short-slug>` or `feat/<short-slug>`
 - Refactors: `jules/refactor/<issue-number>-<short-slug>` or `refactor/<short-slug>`

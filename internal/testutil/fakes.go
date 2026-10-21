@@ -175,8 +175,8 @@ func (r *AuthRepo) DeleteSession(_ context.Context, sessionID string) error {
 
 // ExecutedOrder records the arguments of an OrderRepo.ExecuteTransaction call.
 type ExecutedOrder struct {
-	UserID, StockID       uint
-	Type                  string
+	UserID, StockID        uint
+	Type                   string
 	Quantity, Price, Total float64
 }
 
@@ -331,4 +331,3 @@ func (p *StockProvider) GetStockQuote(ctx context.Context, orderbookID string) (
 	}
 	return nil, ErrNotConfigured
 }
-
