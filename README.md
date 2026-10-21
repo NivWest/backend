@@ -204,3 +204,4 @@ Configure these GitHub repository **Secrets**:
 The VM must have an external IP, SSH access for the configured user, and firewall access to TCP port `8080` if the API should be publicly reachable. The workflow installs Docker if needed but requires the Docker Compose plugin. Attach and mount a Google persistent disk at `/var/lib/nivwest` before the first deployment; PostgreSQL is stored at `/var/lib/nivwest/postgres`, so replacing containers does not remove database data.
 
 The deployment creates `/opt/nivwest/.env` with mode `0600`, pulls the commit image, and runs `docker compose up -d --remove-orphans`. Do not use `docker compose down -v` on the VM, because removing the storage volume would delete application data.
+<!-- spike target branch -->
