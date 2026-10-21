@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"os"
 	"testing"
 	"time"
 
@@ -140,5 +141,26 @@ func TestOrderService_ExecuteOrder_Errors(t *testing.T) {
 				t.Errorf("expected no committed transaction, got %d", len(tt.repo.Executed))
 			}
 		})
+	}
+}
+
+// TestOrderService_ExecuteOrder_ParsesRecordedAvanzaQuote guards against drift between
+// avanzaQuote and the real payload returned by /_api/stock-guide/{id}/quote.
+func TestOrderService_ExecuteOrder_ParsesRecordedAvanzaQuote(t *testing.T) {
+	payload, err := os.ReadFile("testdata/avanza_quote.json")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	repo := &testutil.OrderRepo{}
+	provider := &testutil.StockProvider{GetStockQuoteFn: testutil.QuoteJSON(string(payload))}
+
+	err = newTestOrderService(repo, provider).ExecuteOrder(context.Background(), 1, domain.OrderRequest{
+		Symbol: "5269", Name: "Volvo B", Type: "BUY", Quantity: 2,
+	})
+	if err != nil {
+		t.Fatalf("ExecuteOrder() error = %v", err)
+	}
+	if got := repo.Executed[0].Price; !almostEqual(got, 320.3) {
+		t.Errorf("price = %v, want 320.3 (the quote's \"last\" field)", got)
 	}
 }
