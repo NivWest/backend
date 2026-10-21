@@ -107,11 +107,6 @@ jobs:
               return;
             }
 
-            await github.rest.issues.createComment({
-              owner, repo, issue_number: issue.number,
-              body: `🤖 Delegated to Jules for \`${jiraKey}\`. Jules will open a PR against \`dev\` that closes this issue.`,
-            });
-
             core.setOutput('ready', 'true');
             core.setOutput('jira_key', jiraKey);
             core.setOutput('jira_url', parent.body?.match(/\*\*Jira:\*\*\s*(\S+)/)?.[1] || jiraKey);
@@ -124,12 +119,14 @@ jobs:
     if: needs.gate.outputs.ready == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Invoke Jules
-        uses: google-labs-code/jules-invoke@bff7875eaa123cac6742b7cfc51005b95ba4d566 # v1.0.0
-        with:
-          jules_api_key: ${{ secrets.JULES_API_KEY }}
-          starting_branch: dev
-          prompt: |
+      # Calls the Jules API directly instead of google-labs-code/jules-invoke,
+      # which ignores API errors and always appends the git log to the prompt.
+      - name: Start Jules session
+        id: jules
+        env:
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+          STARTING_BRANCH: dev
+          PROMPT: |
             You are working on the NivWest backend — a Go API using Gin, GORM, and PostgreSQL.
 
             ## Context
@@ -164,3 +161,44 @@ jobs:
                - Title: `${{ needs.gate.outputs.jira_key }} <type>(<scope>): <summary>`
                - Body: summary of the change and design decisions, `Closes #${{ github.event.issue.number }}`,
                  `Jira: ${{ needs.gate.outputs.jira_url }}`, and confirmation that the checks above pass.
+        run: |
+          set -euo pipefail
+          jq -n --arg prompt "$PROMPT" --arg branch "$STARTING_BRANCH" --arg repo "$GITHUB_REPOSITORY" '{
+            prompt: $prompt,
+            sourceContext: {source: "sources/github/\($repo)", githubRepoContext: {startingBranch: $branch}},
+            requirePlanApproval: false,
+            automationMode: "AUTO_CREATE_PR"
+          }' > payload.json
+          curl -sS --fail-with-body https://jules.googleapis.com/v1alpha/sessions \
+            -H 'Content-Type: application/json' \
+            -H "X-Goog-Api-Key: $JULES_API_KEY" \
+            -d @payload.json > session.json
+          url=$(jq -r '.url' session.json)
+          echo "Jules session: $url"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Report delegation on the issue
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          OUTCOME: ${{ steps.jules.outcome }}
+          SESSION_URL: ${{ steps.jules.outputs.url }}
+          JIRA_KEY: ${{ needs.gate.outputs.jira_key }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.issue.number;
+            if (process.env.OUTCOME === 'success') {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number,
+                body: `🤖 Delegated to Jules for \`${process.env.JIRA_KEY}\`: ${process.env.SESSION_URL}\n` +
+                      'Jules will open a PR against `dev` that closes this issue.',
+              });
+            } else {
+              const run = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+              await github.rest.issues.createComment({
+                owner, repo, issue_number,
+                body: `🤖 Could not start a Jules session (${run}). Add the \`agent-delegate\` label again to retry.`,
+              });
+              await github.rest.issues.removeLabel({ owner, repo, issue_number, name: 'agent-delegate' }).catch(() => {});
+            }
