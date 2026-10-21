@@ -33,8 +33,8 @@ func TestPortfolioService_GetDashboard_TotalsAndWeights(t *testing.T) {
 		position("BBB", 5, 100),  // live 100 -> value 500, unrealized 0
 	}}
 	quotes := map[string]string{
-		"AAA": `{"lastPrice":150,"changePercent":2.5}`,
-		"BBB": `{"lastPrice":100,"changePercent":-1}`,
+		"AAA": `{"last":150,"changePercent":2.5}`,
+		"BBB": `{"last":100,"changePercent":-1}`,
 	}
 	provider := &testutil.StockProvider{GetStockQuoteFn: func(_ context.Context, id string) ([]byte, error) {
 		return []byte(quotes[id]), nil
@@ -79,7 +79,7 @@ func TestPortfolioService_GetDashboard_FallsBackToAvgPriceWhenQuoteFails(t *test
 		case "BAD":
 			return []byte("{"), nil
 		default:
-			return []byte(`{"lastPrice":0}`), nil
+			return []byte(`{"last":0}`), nil
 		}
 	}}
 
@@ -106,7 +106,7 @@ func TestPortfolioService_GetDashboard_TopMoversSortedAndCapped(t *testing.T) {
 	provider := &testutil.StockProvider{GetStockQuoteFn: func(_ context.Context, id string) ([]byte, error) {
 		var n int
 		fmt.Sscanf(id, "S%d", &n)
-		return []byte(fmt.Sprintf(`{"lastPrice":10,"changePercent":%d}`, n)), nil
+		return []byte(fmt.Sprintf(`{"last":10,"changePercent":%d}`, n)), nil
 	}}
 
 	dash, err := NewPortfolioService(&testutil.PortfolioRepo{Positions: positions}, provider, users).
