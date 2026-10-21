@@ -205,3 +205,4 @@ The VM must have an external IP, SSH access for the configured user, and firewal
 
 The deployment creates `/opt/nivwest/.env` with mode `0600`, pulls the commit image, and runs `docker compose up -d --remove-orphans`. Do not use `docker compose down -v` on the VM, because removing the storage volume would delete application data.
 <!-- spike target branch -->
+<!-- jules spike run 39575424766 -->
