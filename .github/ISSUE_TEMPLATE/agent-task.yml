@@ -1,0 +1,58 @@
+name: Agent task
+description: An engineering task under a Jira-linked issue that can be delegated to Jules.
+title: "[task] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Create this as a **sub-issue** of the Jira-linked issue (`SCRUM-xx: …`).
+        When every required field is filled in, add the `agent-delegate` label to hand it to Jules.
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: One sentence that says what changes and why.
+    validations:
+      required: true
+  - type: textarea
+    id: paths
+    attributes:
+      label: Target paths
+      description: Files or globs Jules may change, one per line.
+      placeholder: |
+        internal/services/order_service.go
+        internal/handlers/order_handler.go
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Given/When/Then. Each criterion must be covered by a test.
+      placeholder: |
+        Given a user with 1000 SEK cash
+        When they buy 10 shares at 50 SEK
+        Then cash is 500 SEK and the position quantity is 10
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: Commands that must pass before the PR is opened.
+      value: |
+        gofmt -l cmd internal   # must print nothing
+        go vet ./...
+        go test ./...
+        go build ./cmd/api
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of scope
+      description: Anything Jules must not touch or change.
+    validations:
+      required: false

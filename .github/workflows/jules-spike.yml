@@ -1,0 +1,32 @@
+name: Jules Spike (temporary)
+
+# Phase 0 check: does a Jules session started on an existing branch push to that
+# branch, or open a new stacked PR? The answer decides whether
+# agent-stack-merge.yml is needed. Delete this workflow afterwards.
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Existing branch that has an open PR to dev
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  spike:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Invoke Jules on an existing branch
+        uses: google-labs-code/jules-invoke@v1
+        with:
+          jules_api_key: ${{ secrets.JULES_API_KEY }}
+          starting_branch: ${{ inputs.branch }}
+          prompt: |
+            This is an infrastructure test, not a feature.
+            Append exactly one line to the end of README.md:
+            <!-- jules spike run ${{ github.run_id }} -->
+            Make no other changes. Commit with the message "chore: jules spike ${{ github.run_id }}".
+            If you can, push the commit to the existing branch '${{ inputs.branch }}'.
+            Otherwise, open a pull request whose base branch is '${{ inputs.branch }}'.

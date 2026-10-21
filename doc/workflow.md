@@ -70,3 +70,14 @@ Allowed scopes: `auth`, `order`, `portfolio`, `stock`, `user`, `watchlist`, `con
   - Linked issue reference: `Closes #<issue-number>`.
   - Confirmation of passing checks (`gofmt`, `go test ./...`, `go build ./cmd/api`).
 
+
+---
+
+## Agent Lifecycle (Jira → GitHub → Jules)
+
+1. **Jira ticket → GitHub issue.** A new or reassigned Jira ticket is mirrored as an issue titled `<KEY>: <summary>` with the `jira` label, assigned to the ticket owner (`.github/workflows/jira-sync.yml`).
+2. **Breakdown.** The owner splits the issue into **sub-issues** with the **Agent task** form (goal, target paths, acceptance criteria, verification, out of scope).
+3. **Delegation.** Adding the `agent-delegate` label to a sub-issue checks the Definition of Ready and hands the task to Jules (`.github/workflows/agent-implement.yml`). If the task is not ready, a bot comment lists what is missing and the label is removed.
+4. **Pull request.** Jules opens one PR against `dev`, titled `<KEY> <type>(<scope>): …` and containing `Closes #<sub-issue>`. CI must pass, and a human approves every merge.
+5. **Remediation.** Greptile reviews Jules PRs, and Jules may address the findings at most twice (`agent-fix:1`, `agent-fix:2`). After that the PR is labelled `needs-human`.
+6. **Done.** When the parent issue is closed as completed, the Jira ticket moves to Done.
