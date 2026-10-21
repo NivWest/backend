@@ -117,4 +117,3 @@ func TestUserService_DelegatesToRepository(t *testing.T) {
 		t.Errorf("DeleteUser(again) error = %v, want ErrUserNotFound", err)
 	}
 }
-

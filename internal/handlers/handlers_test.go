@@ -323,4 +323,3 @@ func TestPortfolioHandler_Dashboard(t *testing.T) {
 		}
 	})
 }
-

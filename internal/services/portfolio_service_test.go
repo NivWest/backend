@@ -155,4 +155,3 @@ func TestPortfolioService_GetDashboard_PropagatesErrors(t *testing.T) {
 		}
 	})
 }
-

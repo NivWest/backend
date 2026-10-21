@@ -127,4 +127,3 @@ func TestRateLimit_BlocksAfterBurstPerIP(t *testing.T) {
 		t.Fatalf("other IP: status = %d, want 200", code)
 	}
 }
-

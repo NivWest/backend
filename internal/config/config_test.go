@@ -52,4 +52,3 @@ func TestLoad_FallsBackToDefaultsOnInvalidValues(t *testing.T) {
 		t.Errorf("OAuthStateTTL = %v, want default 15m", cfg.Auth.OAuthStateTTL)
 	}
 }
-
