@@ -96,8 +96,9 @@ jobs:
             }
 
             const pulls = await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', per_page: 100 });
-            const closes = new RegExp(`\\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\\s+#${issue.number}\\b`, 'i');
-            const existing = pulls.find(p => p.user.login === 'google-labs-jules[bot]' && closes.test(p.body || ''));
+            // Jules opens PRs under the API key owner's account, not a bot, so detect them by the footer it adds.
+            const mentions = new RegExp(`#${issue.number}\\b`);
+            const existing = pulls.find(p => (p.body || '').includes('PR created automatically by Jules') && mentions.test(p.body));
             if (existing) {
               await github.rest.issues.createComment({
                 owner, repo, issue_number: issue.number,
