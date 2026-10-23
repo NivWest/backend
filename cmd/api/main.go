@@ -30,6 +30,7 @@ func newHTTPServer(app *app.App) (*gin.Engine, error) {
 
 	mountHandlers(
 		engine,
+		app.HealthHandler,
 		app.StockHandler,
 		app.UserHandler,
 		app.AuthHandler,
