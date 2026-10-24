@@ -11,47 +11,56 @@ import (
 
 const userContextKey = "authenticated_user"
 
+var (
+	errUnauthenticated = domain.ErrorResponse{Error: "authentication required", Code: domain.CodeUnauthenticated}
+	errForbidden       = domain.ErrorResponse{Error: "forbidden", Code: domain.CodeForbidden}
+)
+
+// RequireAuth resolves the session_id cookie to a user and stores it in the context.
+// A missing cookie and an unknown or expired session both abort with 401 UNAUTHENTICATED.
+//
+// Logs never contain the session ID, the user's email, or the repository error
+// (which may echo the session ID back from the query).
 func RequireAuth(auth domain.AuthRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		sessionID, err := c.Cookie("session_id")
 		if err != nil || sessionID == "" {
-			log.Printf("[AUTH-MW] %s %s - Authentication required: missing or empty session_id cookie (err=%v)", c.Request.Method, c.Request.URL.Path, err)
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
+			log.Printf("[AUTH-MW] %s %s - missing session cookie", c.Request.Method, c.Request.URL.Path)
+			c.AbortWithStatusJSON(http.StatusUnauthorized, errUnauthenticated)
 			return
 		}
 		user, err := auth.GetSessionUser(c.Request.Context(), sessionID)
-		if err != nil {
-			log.Printf("[AUTH-MW] %s %s - Session validation failed for session_id=%s: %v", c.Request.Method, c.Request.URL.Path, sessionID, err)
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired session"})
+		if err != nil || user == nil {
+			log.Printf("[AUTH-MW] %s %s - invalid or expired session", c.Request.Method, c.Request.URL.Path)
+			c.AbortWithStatusJSON(http.StatusUnauthorized, errUnauthenticated)
 			return
 		}
-		log.Printf("[AUTH-MW] %s %s - User authenticated: ID=%d, email=%s, role=%s (session_id=%s)", c.Request.Method, c.Request.URL.Path, user.ID, user.Email, user.Role, sessionID)
 		c.Set(userContextKey, user)
 		c.Next()
 	}
 }
 
+// RequireRole aborts with 403 FORBIDDEN unless RequireAuth stored a user with the given role.
 func RequireRole(role string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		value, exists := c.Get(userContextKey)
-		user, ok := value.(*models.User)
-		if !exists || !ok {
-			log.Printf("[AUTH-MW] %s %s - Role check failed: user context missing (required role=%s)", c.Request.Method, c.Request.URL.Path, role)
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		user, ok := CurrentUser(c)
+		if !ok {
+			log.Printf("[AUTH-MW] %s %s - forbidden: no authenticated user (required role=%s)", c.Request.Method, c.Request.URL.Path, role)
+			c.AbortWithStatusJSON(http.StatusForbidden, errForbidden)
 			return
 		}
 		if user.Role != role {
-			log.Printf("[AUTH-MW] %s %s - Forbidden: user_id=%d role=%s does not match required role=%s", c.Request.Method, c.Request.URL.Path, user.ID, user.Role, role)
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+			log.Printf("[AUTH-MW] %s %s - forbidden: user_id=%d role=%s (required role=%s)", c.Request.Method, c.Request.URL.Path, user.ID, user.Role, role)
+			c.AbortWithStatusJSON(http.StatusForbidden, errForbidden)
 			return
 		}
-		log.Printf("[AUTH-MW] %s %s - Role authorized: user_id=%d, role=%s", c.Request.Method, c.Request.URL.Path, user.ID, user.Role)
 		c.Next()
 	}
 }
 
+// CurrentUser returns the user stored by RequireAuth.
 func CurrentUser(c *gin.Context) (*models.User, bool) {
 	value, exists := c.Get(userContextKey)
 	user, ok := value.(*models.User)
-	return user, exists && ok
+	return user, exists && ok && user != nil
 }

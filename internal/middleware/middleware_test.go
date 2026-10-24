@@ -1,14 +1,17 @@
 package middleware
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
+	"backend/internal/domain"
 	"backend/internal/models"
 	"backend/internal/testutil"
 	"github.com/gin-gonic/gin"
@@ -45,14 +48,21 @@ func doGet(r http.Handler, cookie string) *httptest.ResponseRecorder {
 	return w
 }
 
-func assertJSONError(t *testing.T, w *httptest.ResponseRecorder, wantStatus int) {
+// assertJSONError checks the status and that the body is a domain.ErrorResponse with the given code.
+func assertJSONError(t *testing.T, w *httptest.ResponseRecorder, wantStatus int, wantCode string) {
 	t.Helper()
 	if w.Code != wantStatus {
 		t.Fatalf("status = %d, want %d (body %s)", w.Code, wantStatus, w.Body.String())
 	}
-	var body map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body["error"] == nil {
-		t.Errorf("expected {\"error\": ...} body, got %s", w.Body.String())
+	var body domain.ErrorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not an ErrorResponse: %v (body %s)", err, w.Body.String())
+	}
+	if body.Error == "" {
+		t.Errorf("error message is empty (body %s)", w.Body.String())
+	}
+	if body.Code != wantCode {
+		t.Errorf("code = %q, want %q", body.Code, wantCode)
 	}
 }
 
@@ -61,10 +71,10 @@ func TestRequireAuth(t *testing.T) {
 	r := newRouter(RequireAuth(auth))
 
 	t.Run("missing cookie returns 401", func(t *testing.T) {
-		assertJSONError(t, doGet(r, ""), http.StatusUnauthorized)
+		assertJSONError(t, doGet(r, ""), http.StatusUnauthorized, domain.CodeUnauthenticated)
 	})
 	t.Run("unknown session returns 401", func(t *testing.T) {
-		assertJSONError(t, doGet(r, "expired"), http.StatusUnauthorized)
+		assertJSONError(t, doGet(r, "expired"), http.StatusUnauthorized, domain.CodeUnauthenticated)
 	})
 	t.Run("valid session stores user in context", func(t *testing.T) {
 		w := doGet(r, "valid")
@@ -87,12 +97,12 @@ func TestRequireRole(t *testing.T) {
 		WithSession("member", &models.User{ID: 2, Role: "member"})
 
 	t.Run("without authenticated user returns 403", func(t *testing.T) {
-		assertJSONError(t, doGet(newRouter(RequireRole("admin")), ""), http.StatusForbidden)
+		assertJSONError(t, doGet(newRouter(RequireRole("admin")), ""), http.StatusForbidden, domain.CodeForbidden)
 	})
 
 	r := newRouter(RequireAuth(auth), RequireRole("admin"))
 	t.Run("wrong role returns 403", func(t *testing.T) {
-		assertJSONError(t, doGet(r, "member"), http.StatusForbidden)
+		assertJSONError(t, doGet(r, "member"), http.StatusForbidden, domain.CodeForbidden)
 	})
 	t.Run("matching role passes", func(t *testing.T) {
 		if w := doGet(r, "admin"); w.Code != http.StatusOK {
@@ -101,29 +111,96 @@ func TestRequireRole(t *testing.T) {
 	})
 }
 
-func TestRateLimit_BlocksAfterBurstPerIP(t *testing.T) {
+// newIPCaller returns a function that sends one GET from the given IP through mw and returns the recorder.
+func newIPCaller(mw gin.HandlerFunc) func(ip string) *httptest.ResponseRecorder {
 	r := gin.New()
-	r.GET("/", RateLimit(), func(c *gin.Context) { c.Status(http.StatusOK) })
-
-	call := func(ip string) int {
+	r.GET("/", mw, func(c *gin.Context) { c.Status(http.StatusOK) })
+	return func(ip string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		req.RemoteAddr = ip + ":12345"
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
-		return w.Code
+		return w
 	}
+}
+
+func TestRateLimit_BlocksAfterBurstPerIP(t *testing.T) {
+	call := newIPCaller(RateLimit())
 
 	// Burst is 10; the 11th immediate request from the same IP must be rejected.
 	for i := 0; i < 10; i++ {
-		if code := call("203.0.113.10"); code != http.StatusOK {
-			t.Fatalf("request %d: status = %d, want 200", i+1, code)
+		if w := call("203.0.113.10"); w.Code != http.StatusOK {
+			t.Fatalf("request %d: status = %d, want 200", i+1, w.Code)
 		}
 	}
-	if code := call("203.0.113.10"); code != http.StatusTooManyRequests {
-		t.Fatalf("request 11: status = %d, want 429", code)
-	}
+	assertJSONError(t, call("203.0.113.10"), http.StatusTooManyRequests, domain.CodeRateLimited)
 	// A different IP has its own bucket.
-	if code := call("203.0.113.11"); code != http.StatusOK {
-		t.Fatalf("other IP: status = %d, want 200", code)
+	if w := call("203.0.113.11"); w.Code != http.StatusOK {
+		t.Fatalf("other IP: status = %d, want 200", w.Code)
+	}
+}
+
+func TestRateLimitPerMinute_AllowsLimitThenBlocksPerIP(t *testing.T) {
+	call := newIPCaller(RateLimitPerMinute(10))
+
+	for i := 0; i < 10; i++ {
+		if w := call("198.51.100.1"); w.Code != http.StatusOK {
+			t.Fatalf("request %d: status = %d, want 200", i+1, w.Code)
+		}
+	}
+	assertJSONError(t, call("198.51.100.1"), http.StatusTooManyRequests, domain.CodeRateLimited)
+
+	// A second IP is unaffected.
+	for i := 0; i < 10; i++ {
+		if w := call("198.51.100.2"); w.Code != http.StatusOK {
+			t.Fatalf("second IP request %d: status = %d, want 200", i+1, w.Code)
+		}
+	}
+}
+
+func TestRateLimitPerMinute_EachCallOwnsItsBuckets(t *testing.T) {
+	first := newIPCaller(RateLimitPerMinute(1))
+	second := newIPCaller(RateLimitPerMinute(1))
+
+	if w := first("198.51.100.3"); w.Code != http.StatusOK {
+		t.Fatalf("first limiter: status = %d, want 200", w.Code)
+	}
+	assertJSONError(t, first("198.51.100.3"), http.StatusTooManyRequests, domain.CodeRateLimited)
+	if w := second("198.51.100.3"); w.Code != http.StatusOK {
+		t.Fatalf("second limiter shares state with the first: status = %d, want 200", w.Code)
+	}
+}
+
+func TestRequireAuth_LogsNeverContainSessionIDOrEmail(t *testing.T) {
+	const (
+		validSession   = "sess-valid-7f3a9c2e"
+		invalidSession = "sess-invalid-b81d44f0"
+		email          = "trader@example.com"
+	)
+	auth := testutil.NewAuthRepo().
+		WithSession(validSession, &models.User{ID: 7, Email: email, Role: "admin"})
+
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+
+	authOnly := newRouter(RequireAuth(auth))
+	withRole := newRouter(RequireAuth(auth), RequireRole("member"))
+
+	if w := doGet(authOnly, validSession); w.Code != http.StatusOK {
+		t.Fatalf("valid session: status = %d, want 200", w.Code)
+	}
+	assertJSONError(t, doGet(authOnly, invalidSession), http.StatusUnauthorized, domain.CodeUnauthenticated)
+	assertJSONError(t, doGet(withRole, validSession), http.StatusForbidden, domain.CodeForbidden)
+
+	out := buf.String()
+	if out == "" {
+		t.Fatal("expected the rejected requests to be logged; log capture is not working")
+	}
+	for _, secret := range []string{validSession, invalidSession, email} {
+		if strings.Contains(out, secret) {
+			t.Errorf("log output contains %q:\n%s", secret, out)
+		}
 	}
 }

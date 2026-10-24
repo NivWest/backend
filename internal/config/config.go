@@ -60,6 +60,10 @@ type Auth struct {
 	SessionTTL         time.Duration
 	OAuthStateTTL      time.Duration
 	CookieSecure       bool
+
+	GuestEnabled            bool
+	GuestSessionTTL         time.Duration
+	GuestRateLimitPerMinute int
 }
 
 func Load(envFile string) (*Config, error) {
@@ -137,6 +141,10 @@ func Load(envFile string) (*Config, error) {
 			SessionTTL:         getDuration("AUTH_SESSION_TTL", 24*time.Hour),
 			OAuthStateTTL:      getDuration("AUTH_OAUTH_STATE_TTL", 15*time.Minute),
 			CookieSecure:       getBool("AUTH_COOKIE_SECURE", false),
+
+			GuestEnabled:            getBool("AUTH_GUEST_ENABLED", false),
+			GuestSessionTTL:         getDuration("AUTH_GUEST_SESSION_TTL", 24*time.Hour),
+			GuestRateLimitPerMinute: getInt("AUTH_GUEST_RATE_LIMIT_PER_MINUTE", 10),
 		},
 	}, nil
 }
