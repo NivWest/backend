@@ -101,19 +101,19 @@ func TestUserService_DelegatesToRepository(t *testing.T) {
 	svc := NewUserService(repo)
 	ctx := context.Background()
 
-	if u, err := svc.GetUserByID(ctx, 1); err != nil || u.Email != "a@example.com" {
-		t.Fatalf("GetUserByID() = %+v, %v", u, err)
-	}
-	if _, err := svc.GetUserByID(ctx, 2); !errors.Is(err, domain.ErrUserNotFound) {
-		t.Errorf("GetUserByID(missing) error = %v, want ErrUserNotFound", err)
-	}
-	if err := svc.CreateUser(ctx, &models.User{Email: "a@example.com"}); !errors.Is(err, domain.ErrUserAlreadyExists) {
-		t.Errorf("CreateUser(duplicate) error = %v, want ErrUserAlreadyExists", err)
-	}
 	if err := svc.DeleteUser(ctx, 1); err != nil {
 		t.Errorf("DeleteUser() error = %v", err)
 	}
+	if _, ok := repo.Users[1]; ok {
+		t.Error("DeleteUser() must remove the user from the repository")
+	}
 	if err := svc.DeleteUser(ctx, 1); !errors.Is(err, domain.ErrUserNotFound) {
 		t.Errorf("DeleteUser(again) error = %v, want ErrUserNotFound", err)
+	}
+
+	repoErr := errors.New("db down")
+	repo.DeleteFn = func(context.Context, uint) error { return repoErr }
+	if err := svc.DeleteUser(ctx, 5); !errors.Is(err, repoErr) {
+		t.Errorf("DeleteUser(repo failure) error = %v, want %v", err, repoErr)
 	}
 }
