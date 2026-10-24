@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -90,5 +91,64 @@ func TestLoad_GuestAuthOverrides(t *testing.T) {
 	}
 	if cfg.Auth.GuestRateLimitPerMinute != 3 {
 		t.Errorf("Auth.GuestRateLimitPerMinute = %d, want 3", cfg.Auth.GuestRateLimitPerMinute)
+	}
+}
+
+func TestLoad_MarketDefaults(t *testing.T) {
+	t.Setenv("MARKET_DATA_PROVIDER", "")
+	t.Setenv("MARKET_SIM_CONTROL_ENABLED", "")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Market.Provider != MarketProviderAvanza {
+		t.Errorf("Market.Provider = %q, want %q", cfg.Market.Provider, MarketProviderAvanza)
+	}
+	if cfg.Market.SimControlEnabled {
+		t.Error("Market.SimControlEnabled = true, want default false")
+	}
+}
+
+func TestLoad_MarketSimulatedWithSimControl(t *testing.T) {
+	t.Setenv("MARKET_DATA_PROVIDER", "simulated")
+	t.Setenv("MARKET_SIM_CONTROL_ENABLED", "true")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Market.Provider != MarketProviderSimulated {
+		t.Errorf("Market.Provider = %q, want %q", cfg.Market.Provider, MarketProviderSimulated)
+	}
+	if !cfg.Market.SimControlEnabled {
+		t.Error("Market.SimControlEnabled = false, want true")
+	}
+}
+
+func TestLoad_MarketProviderIsNormalised(t *testing.T) {
+	t.Setenv("MARKET_DATA_PROVIDER", " Simulated ")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Market.Provider != MarketProviderSimulated {
+		t.Errorf("Market.Provider = %q, want %q", cfg.Market.Provider, MarketProviderSimulated)
+	}
+}
+
+func TestLoad_InvalidMarketProviderErrors(t *testing.T) {
+	t.Setenv("MARKET_DATA_PROVIDER", "bloomberg")
+
+	cfg, err := Load("")
+	if err == nil {
+		t.Fatalf("Load() = %+v, want error", cfg)
+	}
+	msg := err.Error()
+	for _, want := range []string{"MARKET_DATA_PROVIDER", MarketProviderAvanza, MarketProviderSimulated} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q does not mention %q", msg, want)
+		}
 	}
 }
