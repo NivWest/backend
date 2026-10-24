@@ -57,20 +57,18 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 		Timeout: cfg.Avanza.Timeout,
 	}
 
-	// Orders and portfolios still price positions through the legacy Avanza client.
-	avanzaClient := avanza.NewClient(httpClient)
-
-	// The market data port: one provider instance, selected by MARKET_DATA_PROVIDER.
+	// The market data port: one provider instance, selected by MARKET_DATA_PROVIDER, shared by
+	// market data, portfolios and orders (so a pinned simulated price is what orders fill at).
 	warmCtx, cancelWarm := context.WithCancel(context.Background())
 	provider, simHandler := newMarketProvider(warmCtx, cfg, httpClient)
 	marketHandler := handlers.NewMarketHandler(services.NewMarketService(provider))
 
 	portfolioRepo := repository.NewPortfolioRepository(db)
-	portfolioService := services.NewPortfolioService(portfolioRepo, avanzaClient, userRepo)
+	portfolioService := services.NewPortfolioService(portfolioRepo, provider, userRepo)
 	portfolioHandler := handlers.NewPortfolioHandler(portfolioService, authRepo)
 
 	orderRepo := repository.NewOrderRepository(db)
-	orderService := services.NewOrderService(orderRepo, avanzaClient)
+	orderService := services.NewOrderService(orderRepo, provider)
 	orderHandler := handlers.NewOrderHandler(orderService, authRepo)
 
 	watchlistRepo := repository.NewWatchlistRepository(db)

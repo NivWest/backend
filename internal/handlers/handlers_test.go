@@ -92,10 +92,10 @@ func expectErrorBody(t *testing.T, w *httptest.ResponseRecorder) {
 // ---------------------------------------------------------------------------
 
 func TestOrderHandler_PlaceOrder(t *testing.T) {
-	quote := testutil.QuoteJSON(`{"last":100}`)
+	quote := testutil.FixedQuote(domain.Quote{Last: 100})
 
 	t.Run("requires authentication", func(t *testing.T) {
-		svc := services.NewOrderService(&testutil.OrderRepo{}, &testutil.StockProvider{GetStockQuoteFn: quote})
+		svc := services.NewOrderService(&testutil.OrderRepo{}, &testutil.MarketProvider{QuoteFn: quote})
 		w := do(t, newEngine(NewOrderHandler(svc, newAuth())), http.MethodPost, "/api/v1/orders", "", map[string]any{})
 		expectStatus(t, w, http.StatusUnauthorized)
 	})
@@ -110,7 +110,7 @@ func TestOrderHandler_PlaceOrder(t *testing.T) {
 	for name, body := range invalid {
 		t.Run("rejects "+name, func(t *testing.T) {
 			repo := &testutil.OrderRepo{}
-			svc := services.NewOrderService(repo, &testutil.StockProvider{GetStockQuoteFn: quote})
+			svc := services.NewOrderService(repo, &testutil.MarketProvider{QuoteFn: quote})
 			w := do(t, newEngine(NewOrderHandler(svc, newAuth())), http.MethodPost, "/api/v1/orders", memberSession, body)
 			expectStatus(t, w, http.StatusBadRequest)
 			expectErrorBody(t, w)
@@ -122,7 +122,7 @@ func TestOrderHandler_PlaceOrder(t *testing.T) {
 
 	t.Run("executes valid order for current user", func(t *testing.T) {
 		repo := &testutil.OrderRepo{}
-		svc := services.NewOrderService(repo, &testutil.StockProvider{GetStockQuoteFn: quote})
+		svc := services.NewOrderService(repo, &testutil.MarketProvider{QuoteFn: quote})
 		w := do(t, newEngine(NewOrderHandler(svc, newAuth())), http.MethodPost, "/api/v1/orders", memberSession,
 			domain.OrderRequest{Symbol: "VOLV-B", Type: "BUY", Quantity: 2})
 		expectStatus(t, w, http.StatusOK)
@@ -135,7 +135,7 @@ func TestOrderHandler_PlaceOrder(t *testing.T) {
 		repo := &testutil.OrderRepo{ExecuteTransactionFn: func(context.Context, testutil.ExecutedOrder) error {
 			return errors.New("insufficient funds")
 		}}
-		svc := services.NewOrderService(repo, &testutil.StockProvider{GetStockQuoteFn: quote})
+		svc := services.NewOrderService(repo, &testutil.MarketProvider{QuoteFn: quote})
 		w := do(t, newEngine(NewOrderHandler(svc, newAuth())), http.MethodPost, "/api/v1/orders", memberSession,
 			domain.OrderRequest{Symbol: "VOLV-B", Type: "BUY", Quantity: 1})
 		expectStatus(t, w, http.StatusBadRequest)
@@ -339,44 +339,18 @@ func TestWatchlistHandler(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Stocks & portfolio
+// Portfolio
 // ---------------------------------------------------------------------------
-
-func TestStockHandler(t *testing.T) {
-	provider := &testutil.StockProvider{
-		SearchFn: func(_ context.Context, q string) ([]byte, error) { return []byte(`{"q":"` + q + `"}`), nil },
-	}
-	r := newEngine(NewStockHandler(services.NewStockService(provider)))
-
-	t.Run("search without query returns 400", func(t *testing.T) {
-		w := do(t, r, http.MethodGet, "/api/v1/stocks/search", "", nil)
-		expectStatus(t, w, http.StatusBadRequest)
-		expectErrorBody(t, w)
-	})
-
-	t.Run("search passes upstream JSON through", func(t *testing.T) {
-		w := do(t, r, http.MethodGet, "/api/v1/stocks/search?q=volvo", "", nil)
-		expectStatus(t, w, http.StatusOK)
-		if w.Body.String() != `{"q":"volvo"}` {
-			t.Errorf("body = %s", w.Body.String())
-		}
-	})
-
-	t.Run("quote without orderbookID returns 400", func(t *testing.T) {
-		w := do(t, r, http.MethodGet, "/api/v1/stocks/quote", "", nil)
-		expectStatus(t, w, http.StatusBadRequest)
-	})
-}
 
 func TestPortfolioHandler_Dashboard(t *testing.T) {
 	t.Run("requires auth", func(t *testing.T) {
-		svc := services.NewPortfolioService(&testutil.PortfolioRepo{}, &testutil.StockProvider{}, testutil.NewUserRepo())
+		svc := services.NewPortfolioService(&testutil.PortfolioRepo{}, &testutil.MarketProvider{}, testutil.NewUserRepo())
 		w := do(t, newEngine(NewPortfolioHandler(svc, newAuth())), http.MethodGet, "/api/v1/portfolio/dashboard", "", nil)
 		expectStatus(t, w, http.StatusUnauthorized)
 	})
 
 	t.Run("service error returns 500", func(t *testing.T) {
-		svc := services.NewPortfolioService(&testutil.PortfolioRepo{}, &testutil.StockProvider{}, testutil.NewUserRepo())
+		svc := services.NewPortfolioService(&testutil.PortfolioRepo{}, &testutil.MarketProvider{}, testutil.NewUserRepo())
 		w := do(t, newEngine(NewPortfolioHandler(svc, newAuth())), http.MethodGet, "/api/v1/portfolio/dashboard", memberSession, nil)
 		expectStatus(t, w, http.StatusInternalServerError)
 		expectErrorBody(t, w)
@@ -384,7 +358,7 @@ func TestPortfolioHandler_Dashboard(t *testing.T) {
 
 	t.Run("returns dashboard", func(t *testing.T) {
 		users := testutil.NewUserRepo(&models.User{ID: 1, Balance: 1234})
-		svc := services.NewPortfolioService(&testutil.PortfolioRepo{}, &testutil.StockProvider{}, users)
+		svc := services.NewPortfolioService(&testutil.PortfolioRepo{}, &testutil.MarketProvider{}, users)
 		w := do(t, newEngine(NewPortfolioHandler(svc, newAuth())), http.MethodGet, "/api/v1/portfolio/dashboard", memberSession, nil)
 		expectStatus(t, w, http.StatusOK)
 		var dash services.PortfolioDashboard

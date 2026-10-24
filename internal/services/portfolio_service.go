@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"sort"
 	"sync"
 
@@ -10,20 +9,20 @@ import (
 )
 
 type PortfolioService struct {
-	repo          domain.PortfolioRepository
-	stockProvider domain.StockProvider
-	userRepo      domain.UserRepository
+	repo     domain.PortfolioRepository
+	provider domain.MarketDataProvider
+	userRepo domain.UserRepository
 }
 
 func NewPortfolioService(
 	repo domain.PortfolioRepository,
-	stockProvider domain.StockProvider,
+	provider domain.MarketDataProvider,
 	userRepo domain.UserRepository,
 ) *PortfolioService {
 	return &PortfolioService{
-		repo:          repo,
-		stockProvider: stockProvider,
-		userRepo:      userRepo,
+		repo:     repo,
+		provider: provider,
+		userRepo: userRepo,
 	}
 }
 
@@ -44,11 +43,6 @@ type PortfolioDashboard struct {
 	TotalUnrealized float64             `json:"total_unrealized"`
 	Positions       []DashboardPosition `json:"positions"`
 	TopMovers       []DashboardPosition `json:"top_movers"`
-}
-
-type avanzaQuote struct {
-	LastPrice     float64 `json:"last"`
-	ChangePercent float64 `json:"changePercent"`
 }
 
 func (s *PortfolioService) GetDashboard(ctx context.Context, userID uint) (*PortfolioDashboard, error) {
@@ -87,14 +81,11 @@ func (s *PortfolioService) GetDashboard(ctx context.Context, userID uint) (*Port
 				AvgPrice:  position.AvgPrice,
 			}
 
-			// Fetch real-time quote
-			quoteBytes, err := s.stockProvider.GetStockQuote(ctx, position.Symbol)
-			if err == nil {
-				var quote avanzaQuote
-				if err := json.Unmarshal(quoteBytes, &quote); err == nil {
-					dp.CurrentPrice = quote.LastPrice
-					dp.ChangePercent = quote.ChangePercent
-				}
+			// Fetch real-time quote. Positions still carry only a symbol, which is passed as the
+			// instrument id as before; identifying instruments by orderbook_id is NW-04's job.
+			if quote, err := s.provider.Quote(ctx, position.Symbol); err == nil {
+				dp.CurrentPrice = quote.Last
+				dp.ChangePercent = quote.ChangePercent
 			}
 
 			// Fallback if quote fails
