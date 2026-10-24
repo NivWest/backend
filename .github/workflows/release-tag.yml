@@ -1,0 +1,69 @@
+name: Release Tag
+
+# When a human merges release/X.Y.Z or hotfix/X.Y.Z into main:
+#   1. tag the merge commit vX.Y.Z
+#   2. create the GitHub Release with git-cliff notes
+#   3. open the back-merge PR main → dev (a human merges it)
+# PRs opened with the default GITHUB_TOKEN don't trigger CI; add a RELEASE_TOKEN secret
+# (fine-grained PAT: contents + pull requests write) or close/reopen the back-merge PR to run checks.
+# Repo setting needed: Actions → "Allow GitHub Actions to create and approve pull requests".
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    if: github.event.pull_request.merged == true && (startsWith(github.head_ref, 'release/') || startsWith(github.head_ref, 'hotfix/'))
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Tag the merge commit
+        id: tag
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          version="${HEAD_REF#*/}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::'$HEAD_REF' is not release/X.Y.Z or hotfix/X.Y.Z"; exit 1; }
+          tag="v$version"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then echo "::error::$tag already exists"; exit 1; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" "$SHA" -m "Release $tag"
+          git push origin "$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: RELEASE_NOTES.md
+
+      - name: Create GitHub Release
+        run: gh release create "${{ steps.tag.outputs.tag }}" --title "${{ steps.tag.outputs.tag }}" --notes-file RELEASE_NOTES.md --verify-tag
+
+      - name: Open back-merge PR into dev
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          if [ "$(git rev-list --count origin/dev..origin/main)" = "0" ]; then echo "dev already contains main"; exit 0; fi
+          gh pr create --base dev --head main \
+            --title "chore(release): back-merge $TAG into dev" \
+            --body "Brings the $TAG release (version bump, changelog, release fixes) back into \`dev\`. Merge with a **merge commit**." \
+            || echo "::warning::Back-merge PR not created (one may already be open)"

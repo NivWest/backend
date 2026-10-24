@@ -1,0 +1,49 @@
+name: PR Policy
+
+# GitFlow guard rails (see NivWest/platform docs/git-workflow.md):
+# - PR titles are Conventional Commits (feature PRs are squash-merged, so the title becomes the commit).
+# - Only release/* and hotfix/* go into main; dev takes feature/bugfix/release/hotfix and back-merges from main.
+# - A release/hotfix PR must carry the matching version in VERSION or package.json.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  title:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  branches:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Check source and target branch
+        env:
+          HEAD: ${{ github.head_ref }}
+          BASE: ${{ github.base_ref }}
+        run: |
+          fail() { echo "::error::$1 (see docs/git-workflow.md in NivWest/platform)"; exit 1; }
+          case "$BASE" in
+            main)
+              [[ "$HEAD" =~ ^(release|hotfix)/[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+                || fail "Only release/X.Y.Z and hotfix/X.Y.Z branches may target main (got '$HEAD')"
+              version="${HEAD#*/}"
+              if [ -f VERSION ]; then current="$(tr -d '[:space:]' < VERSION)"; else current="$(node -p "require('./package.json').version")"; fi
+              [ "$current" = "$version" ] || fail "Branch is $HEAD but the version file says $current"
+              ;;
+            dev)
+              [[ "$HEAD" =~ ^(feature|bugfix|release|hotfix|dependabot)/ || "$HEAD" == main ]] \
+                || fail "Branches into dev must be feature/*, bugfix/*, release/*, hotfix/* or main (got '$HEAD')"
+              ;;
+          esac
+          echo "$HEAD → $BASE is allowed"

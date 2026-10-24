@@ -4,6 +4,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
     restart: unless-stopped
     env_file:
       - path: ${APP_ENV_FILE:-.env}
@@ -20,14 +22,13 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    container_name: avanza_db
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${DB_USER:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
       POSTGRES_DB: ${DB_NAME:-avanza}
     ports:
-      - "5432:5432"
+      - "${DB_PORT:-5432}:5432"
     tmpfs:
       - /var/lib/postgresql/data
     healthcheck:

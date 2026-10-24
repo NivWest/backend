@@ -41,43 +41,28 @@ When tasked with adding a new entity or endpoint, follow this sequence:
 
 ---
 
-## 3. Git & Agent Workflow Conventions
+## 3. Git Workflow (GitFlow)
 
-Automated agents (e.g. Jules, CI bots) and contributors must follow these Git standards:
+The full rules live in the workspace repo: [`NivWest/platform` → `docs/git-workflow.md`](https://github.com/NivWest/platform/blob/main/docs/git-workflow.md). In short:
 
-### 3.1. Branch Naming
-Branch directly from `dev` (`main` is the release branch):
-- Bug fixes: `jules/fix/<issue-number>-<short-slug>` or `fix/<short-slug>`
-- Features: `jules/feat/<issue-number>-<short-slug>` or `feat/<short-slug>`
-- Refactors: `jules/refactor/<issue-number>-<short-slug>` or `refactor/<short-slug>`
-- Chores & Docs: `jules/chore/<issue-number>-<short-slug>` or `docs/<short-slug>`
+### 3.1. Branches
+| Branch | From | Into | Merge method |
+|---|---|---|---|
+| `feature/<id>-<slug>` | `dev` | `dev` | squash |
+| `bugfix/<id>-<slug>` | `dev` | `dev` | squash |
+| `release/X.Y.Z` | `dev` | `main` (+ back-merge into `dev`) | merge commit |
+| `hotfix/X.Y.Z` | `main` | `main` (+ back-merge into `dev`) | merge commit |
 
-### 3.2. Commit Messages (Conventional Commits)
-Use atomic commits with standard Conventional Commit prefixes:
-- `feat(scope): ...`
-- `fix(scope): ...`
-- `refactor(scope): ...`
-- `test(scope): ...`
-- `docs(scope): ...`
-- `chore(scope): ...`
+`<id>` is the GitHub Project issue number when there is one. `main` is production; every merge into it is tagged `vX.Y.Z` by CI.
+
+### 3.2. Commit Messages & PR Titles (Conventional Commits)
+`type(scope): summary`, with `type` one of `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `build`, `ci`, `chore`. Breaking changes use `!` or a `BREAKING CHANGE:` footer.
 
 Allowed scopes: `auth`, `order`, `portfolio`, `stock`, `user`, `watchlist`, `config`, `db`, `api`.
 
-### 3.3. Pull Request Requirements
-- **Title:** Conventional commit format matching the primary change.
-- **Body:**
-  - Brief summary of changes and design decisions.
-  - Linked issue reference: `Closes #<issue-number>`.
-  - Confirmation of passing checks (`gofmt`, `go test ./...`, `go build ./cmd/api`).
+Feature PRs are squash-merged, so the **PR title becomes the commit on `dev`** and must be a Conventional Commit (CI checks it).
 
-
----
-
-## Agent Lifecycle (Jira → GitHub → Jules)
-
-1. **Jira ticket → GitHub issue.** A new or reassigned Jira ticket is mirrored as an issue titled `<KEY>: <summary>` with the `jira` label, assigned to the ticket owner (`.github/workflows/jira-sync.yml`).
-2. **Breakdown.** The owner splits the issue into **sub-issues**. Each one only needs a sentence or two saying what should change: use the **Agent task** form (Task, plus optional Hints) or a plain issue body. Jules works out the files, acceptance criteria and tests from the code, these docs and the user story in the parent issue.
-3. **Delegation.** Adding the `agent-delegate` label to a sub-issue checks the Definition of Ready (a task description and a Jira-linked parent) and hands the task to Jules (`.github/workflows/agent-implement.yml`). If the task is not ready, a bot comment lists what is missing and the label is removed.
-4. **Pull request.** Jules opens one PR against `dev`, titled `<KEY> <type>(<scope>): …`. Its body lists the acceptance criteria Jules chose, the files changed, its assumptions and the verification, then `Closes #<sub-issue>`. Review against those criteria. CI must pass, and a human approves every merge.
-5. **Remediation.** Greptile reviews Jules PRs, and Jules may address the findings at most twice (`agent-fix:1`, `agent-fix:2`). After that the PR is labelled `needs-human`.
-6. **Done.** When the parent issue is closed as completed, the Jira ticket moves to Done.
+### 3.3. Pull Requests
+- Opened and merged by humans. AI agents (the `/story` workflow in the platform workspace) only push `feature/*` branches.
+- **Body:** summary and design decisions, the acceptance criteria as a checklist, and `Closes NivWest/platform#<id>` when there is an issue.
+- CI must pass: `gofmt`, `go vet ./...`, `go test ./...`, `go build ./cmd/api`.

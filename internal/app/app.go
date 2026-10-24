@@ -13,6 +13,7 @@ import (
 )
 
 type App struct {
+	HealthHandler    *handlers.HealthHandler
 	UserHandler      *handlers.UserHandler
 	StockHandler     *handlers.StockHandler
 	AuthHandler      *handlers.AuthHandler
@@ -73,6 +74,7 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	}
 
 	return &App{
+		HealthHandler:    handlers.NewHealthHandler(),
 		UserHandler:      userHandler,
 		StockHandler:     stockHandler,
 		AuthHandler:      authHandler,
