@@ -18,5 +18,5 @@ Before making any modifications to the codebase, **you must read the relevant do
 
 NivWest Backend is a Go API service powering the NivWest stock trading simulator. 
 - **Tech Stack**: Go 1.25, Gin, GORM (PostgreSQL 16)
-- **Features**: Market data proxying (Avanza), virtual portfolios with market frictions, Google OAuth 2.0 (PKCE).
+- **Features**: Market data behind a provider port (Avanza or a deterministic simulated market, chosen by `MARKET_DATA_PROVIDER`), virtual portfolios with market frictions, Google OAuth 2.0 (PKCE).
 - **Golden Rule**: Handlers must never access the database directly. All business logic lives in Services, and all dependencies are injected.

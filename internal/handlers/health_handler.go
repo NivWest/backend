@@ -9,14 +9,17 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// HealthHandler reports liveness, the running build version and the enabled features.
-// Used by local stacks, E2E runs and (later) Cloud Run health checks.
+// HealthHandler reports liveness, the running build version, the enabled features and the active
+// market data provider. Used by local stacks, E2E runs and (later) Cloud Run health checks.
 type HealthHandler struct {
-	features domain.Features
+	features           domain.Features
+	marketDataProvider string
 }
 
-func NewHealthHandler(features domain.Features) *HealthHandler {
-	return &HealthHandler{features: features}
+// NewHealthHandler takes the deployment's feature switches and the active market data provider
+// ("avanza" or "simulated", MARKET_DATA_PROVIDER).
+func NewHealthHandler(features domain.Features, marketDataProvider string) *HealthHandler {
+	return &HealthHandler{features: features, marketDataProvider: marketDataProvider}
 }
 
 func (h *HealthHandler) Register(v1 *gin.RouterGroup) {
@@ -28,5 +31,7 @@ func (h *HealthHandler) Health(c *gin.Context) {
 		Status:   "ok",
 		Version:  version.Version,
 		Features: h.features,
+
+		MarketDataProvider: h.marketDataProvider,
 	})
 }

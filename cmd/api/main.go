@@ -28,16 +28,22 @@ func newHTTPServer(app *app.App) (*gin.Engine, error) {
 		gin.Recovery(),
 	)
 
-	mountHandlers(
-		engine,
+	registrars := []Registrar{
 		app.HealthHandler,
-		app.StockHandler,
+		app.MarketHandler,
 		app.UserHandler,
 		app.AuthHandler,
 		app.PortfolioHandler,
 		app.OrderHandler,
 		app.WatchlistHandler,
-	)
+	}
+	// SimHandler is nil unless sim control is enabled; appending a nil *SimHandler would be a
+	// non-nil Registrar whose routes still mount, so only add it when it exists.
+	if app.SimHandler != nil {
+		registrars = append(registrars, app.SimHandler)
+	}
+
+	mountHandlers(engine, registrars...)
 
 	return engine, nil
 }
