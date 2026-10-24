@@ -147,65 +147,136 @@ func TestOrderHandler_PlaceOrder(t *testing.T) {
 // Users
 // ---------------------------------------------------------------------------
 
+func expectErrorCode(t *testing.T, w *httptest.ResponseRecorder, wantCode string) {
+	t.Helper()
+	var body domain.ErrorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body.Error == "" || body.Code != wantCode {
+		t.Errorf("expected {\"error\": ..., \"code\": %q} body, got %s", wantCode, w.Body.String())
+	}
+}
+
 func TestUserHandler(t *testing.T) {
+	const guestSession = "guest-session"
+	newRouterWithAuth := func(users *testutil.UserRepo, auth *testutil.AuthRepo) *gin.Engine {
+		return newEngine(NewUserHandler(services.NewUserService(users), auth))
+	}
 	newRouter := func(users *testutil.UserRepo) *gin.Engine {
-		return newEngine(NewUserHandler(services.NewUserService(users), newAuth()))
+		return newRouterWithAuth(users, newAuth())
 	}
 
-	t.Run("GET /users/:id rejects non-numeric id", func(t *testing.T) {
-		w := do(t, newRouter(testutil.NewUserRepo()), http.MethodGet, "/api/v1/users/abc", "", nil)
-		expectStatus(t, w, http.StatusBadRequest)
-		expectErrorBody(t, w)
+	t.Run("legacy GET /users/:id is gone", func(t *testing.T) {
+		users := testutil.NewUserRepo(&models.User{ID: 1, Email: "one@example.com"})
+		w := do(t, newRouter(users), http.MethodGet, "/api/v1/users/1", "", nil)
+		expectStatus(t, w, http.StatusNotFound)
 	})
 
-	t.Run("GET /users/:id returns user", func(t *testing.T) {
-		users := testutil.NewUserRepo(&models.User{ID: 5, Email: "five@example.com"})
-		w := do(t, newRouter(users), http.MethodGet, "/api/v1/users/5", "", nil)
-		expectStatus(t, w, http.StatusOK)
-	})
-
-	t.Run("POST /users duplicate returns 409", func(t *testing.T) {
-		users := testutil.NewUserRepo(&models.User{ID: 1, Email: "dup@example.com"})
-		w := do(t, newRouter(users), http.MethodPost, "/api/v1/users/", "", map[string]any{"email": "dup@example.com"})
-		expectStatus(t, w, http.StatusConflict)
-		expectErrorBody(t, w)
+	t.Run("legacy POST /users/ is gone", func(t *testing.T) {
+		users := testutil.NewUserRepo()
+		w := do(t, newRouter(users), http.MethodPost, "/api/v1/users/", "", map[string]any{"email": "new@example.com"})
+		expectStatus(t, w, http.StatusNotFound)
+		if len(users.Users) != 0 {
+			t.Errorf("no user may be created, got %d", len(users.Users))
+		}
 	})
 
 	t.Run("GET /user/profile requires auth", func(t *testing.T) {
 		w := do(t, newRouter(testutil.NewUserRepo()), http.MethodGet, "/api/v1/user/profile", "", nil)
 		expectStatus(t, w, http.StatusUnauthorized)
+		expectErrorCode(t, w, domain.CodeUnauthenticated)
 	})
 
-	t.Run("GET /user/profile returns current user", func(t *testing.T) {
-		w := do(t, newRouter(testutil.NewUserRepo()), http.MethodGet, "/api/v1/user/profile", memberSession, nil)
+	t.Run("GET /user/profile returns public profile without google_id", func(t *testing.T) {
+		auth := testutil.NewAuthRepo().WithSession(memberSession, &models.User{
+			ID: 1, Name: "Member", Email: "member@example.com", Role: domain.RoleMember,
+			Balance: 2500, GoogleID: "google-secret-123",
+		})
+		w := do(t, newRouterWithAuth(testutil.NewUserRepo(), auth), http.MethodGet, "/api/v1/user/profile", memberSession, nil)
 		expectStatus(t, w, http.StatusOK)
-		var u models.User
-		_ = json.Unmarshal(w.Body.Bytes(), &u)
-		if u.ID != 1 {
-			t.Errorf("profile id = %d, want 1", u.ID)
+		var body map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode profile: %v (body %s)", err, w.Body.String())
+		}
+		want := map[string]any{
+			"id": float64(1), "name": "Member", "email": "member@example.com",
+			"role": domain.RoleMember, "balance": float64(2500), "is_guest": false,
+		}
+		for k, v := range want {
+			if body[k] != v {
+				t.Errorf("profile[%q] = %v, want %v", k, body[k], v)
+			}
+		}
+		if _, ok := body["google_id"]; ok {
+			t.Errorf("profile must not contain google_id: %s", w.Body.String())
+		}
+		if len(body) != len(want) {
+			t.Errorf("profile has unexpected keys: %s", w.Body.String())
 		}
 	})
 
+	t.Run("GET /user/profile marks guests", func(t *testing.T) {
+		auth := newAuth().WithSession(guestSession, &models.User{
+			ID: 3, Name: domain.GuestName, Email: "guest-x@" + domain.GuestEmailDomain, Role: domain.RoleGuest,
+			Balance: domain.GuestStartingBalance, GoogleID: domain.GuestGoogleIDPrefix + "x",
+		})
+		w := do(t, newRouterWithAuth(testutil.NewUserRepo(), auth), http.MethodGet, "/api/v1/user/profile", guestSession, nil)
+		expectStatus(t, w, http.StatusOK)
+		var body map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode profile: %v", err)
+		}
+		if body["is_guest"] != true || body["role"] != domain.RoleGuest || body["id"] != float64(3) {
+			t.Errorf("guest profile = %s", w.Body.String())
+		}
+		if _, ok := body["google_id"]; ok {
+			t.Errorf("profile must not contain google_id: %s", w.Body.String())
+		}
+	})
+
+	t.Run("DELETE /admin/users/:id requires auth", func(t *testing.T) {
+		w := do(t, newRouter(testutil.NewUserRepo(&models.User{ID: 7})), http.MethodDelete, "/api/v1/admin/users/7", "", nil)
+		expectStatus(t, w, http.StatusUnauthorized)
+		expectErrorCode(t, w, domain.CodeUnauthenticated)
+	})
+
 	t.Run("DELETE /admin/users/:id forbids non-admin", func(t *testing.T) {
-		w := do(t, newRouter(testutil.NewUserRepo()), http.MethodDelete, "/api/v1/admin/users/1", memberSession, nil)
+		users := testutil.NewUserRepo(&models.User{ID: 1})
+		w := do(t, newRouter(users), http.MethodDelete, "/api/v1/admin/users/1", memberSession, nil)
 		expectStatus(t, w, http.StatusForbidden)
+		expectErrorCode(t, w, domain.CodeForbidden)
+		if _, ok := users.Users[1]; !ok {
+			t.Error("user must not be deleted by a non-admin")
+		}
 	})
 
 	t.Run("DELETE /admin/users/:id maps not found to 404", func(t *testing.T) {
 		w := do(t, newRouter(testutil.NewUserRepo()), http.MethodDelete, "/api/v1/admin/users/99", adminSession, nil)
 		expectStatus(t, w, http.StatusNotFound)
-		expectErrorBody(t, w)
+		expectErrorCode(t, w, domain.CodeUserNotFound)
 	})
 
-	t.Run("DELETE /admin/users/:id rejects invalid id", func(t *testing.T) {
-		w := do(t, newRouter(testutil.NewUserRepo()), http.MethodDelete, "/api/v1/admin/users/-1", adminSession, nil)
-		expectStatus(t, w, http.StatusBadRequest)
+	for _, id := range []string{"-1", "0", "abc"} {
+		t.Run("DELETE /admin/users/:id rejects invalid id "+id, func(t *testing.T) {
+			w := do(t, newRouter(testutil.NewUserRepo()), http.MethodDelete, "/api/v1/admin/users/"+id, adminSession, nil)
+			expectStatus(t, w, http.StatusBadRequest)
+			expectErrorCode(t, w, domain.CodeValidation)
+		})
+	}
+
+	t.Run("DELETE /admin/users/:id maps repository failure to 500", func(t *testing.T) {
+		users := testutil.NewUserRepo()
+		users.DeleteFn = func(context.Context, uint) error { return errors.New("db down") }
+		w := do(t, newRouter(users), http.MethodDelete, "/api/v1/admin/users/7", adminSession, nil)
+		expectStatus(t, w, http.StatusInternalServerError)
+		expectErrorCode(t, w, domain.CodeInternal)
 	})
 
 	t.Run("DELETE /admin/users/:id returns 204", func(t *testing.T) {
 		users := testutil.NewUserRepo(&models.User{ID: 7})
 		w := do(t, newRouter(users), http.MethodDelete, "/api/v1/admin/users/7", adminSession, nil)
 		expectStatus(t, w, http.StatusNoContent)
+		if _, ok := users.Users[7]; ok {
+			t.Error("user 7 should be deleted")
+		}
 	})
 }
 
