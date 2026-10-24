@@ -1,0 +1,217 @@
+openapi: 3.1.0
+info:
+  title: NivWest API
+  version: 0.1.0
+  description: |
+    Cross-repo source of truth for the NivWest backend API. Each story adds its paths here in its contract step.
+    Errors on new and changed endpoints use the `Error` schema: `{"error": "<human message>", "code": "<UPPER_SNAKE>"}`.
+servers:
+  - url: /api/v1
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: session_id
+      description: HttpOnly session cookie set by the Google callback or POST /auth/guest.
+
+  schemas:
+    Error:
+      type: object
+      required: [error, code]
+      properties:
+        error:
+          type: string
+          description: Human-readable message.
+        code:
+          type: string
+          description: Stable UPPER_SNAKE code.
+          examples: [UNAUTHENTICATED, FORBIDDEN, RATE_LIMITED, VALIDATION_ERROR, USER_NOT_FOUND, INTERNAL_ERROR]
+
+    Role:
+      type: string
+      enum: [member, admin, guest]
+
+    Profile:
+      type: object
+      description: The signed-in user. Never exposes google_id.
+      required: [id, name, email, role, balance, is_guest]
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+          examples: [Guest trader]
+        email:
+          type: string
+        role:
+          $ref: "#/components/schemas/Role"
+        balance:
+          type: number
+          description: Cash balance in SEK, 2 decimals.
+          examples: [100000]
+        is_guest:
+          type: boolean
+          description: True when role is guest.
+
+    Features:
+      type: object
+      description: Optional switches that are enabled on this deployment.
+      required: [guest_auth]
+      properties:
+        guest_auth:
+          type: boolean
+          description: True when AUTH_GUEST_ENABLED is on and POST /auth/guest is registered.
+
+    Health:
+      type: object
+      required: [status, version, features]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        version:
+          type: string
+        features:
+          $ref: "#/components/schemas/Features"
+
+  responses:
+    Unauthenticated:
+      description: Missing, unknown or expired session.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: authentication required, code: UNAUTHENTICATED }
+    Forbidden:
+      description: Signed in, but the role is not allowed.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: forbidden, code: FORBIDDEN }
+
+paths:
+  /health:
+    get:
+      summary: Liveness, build version and enabled features
+      operationId: getHealth
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+              example: { status: ok, version: 0.1.0, features: { guest_auth: true } }
+
+  /auth/login:
+    get:
+      summary: Start Google OAuth (PKCE); redirects to Google
+      operationId: login
+      responses:
+        "302":
+          description: Redirect to Google. Sets the HttpOnly oauth_state cookie.
+
+  /auth/callback:
+    get:
+      summary: Google OAuth callback; sets session_id and redirects to the frontend
+      operationId: callback
+      parameters:
+        - { name: state, in: query, required: true, schema: { type: string } }
+        - { name: code, in: query, required: true, schema: { type: string } }
+      responses:
+        "302":
+          description: Redirect to FRONTEND_URL/dashboard. Sets the HttpOnly session_id cookie.
+        "400":
+          description: Invalid OAuth state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+
+  /auth/guest:
+    post:
+      summary: Sign in as a fresh guest (demo and E2E login)
+      description: |
+        Only registered when AUTH_GUEST_ENABLED=true; otherwise the route does not exist and returns 404.
+        Takes no body. Each call creates a new guest user (role guest, name "Guest trader", balance 100000)
+        and a session lasting AUTH_GUEST_SESSION_TTL (default 24h). Rate-limited per client IP
+        (AUTH_GUEST_RATE_LIMIT_PER_MINUTE, default 10 per minute). Guests are hard-deleted 24h after
+        their newest session expired.
+      operationId: loginAsGuest
+      responses:
+        "201":
+          description: Guest created and signed in.
+          headers:
+            Set-Cookie:
+              description: "session_id=<opaque>; Path=/; Max-Age=<ttl seconds>; HttpOnly"
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Profile" }
+              example: { id: 17, name: Guest trader, email: guest-3f2a…@guest.tradeedu.invalid, role: guest, balance: 100000, is_guest: true }
+        "404":
+          description: Guest login is disabled on this deployment.
+        "429":
+          description: Too many guest logins from this IP.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: too many guest logins, please try again later, code: RATE_LIMITED }
+        "500":
+          description: Could not create the guest.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: failed to create guest, code: INTERNAL_ERROR }
+
+  /auth/logout:
+    post:
+      summary: End the current session
+      description: Deletes the session (if any) and clears the session_id cookie. Always 204.
+      operationId: logout
+      responses:
+        "204":
+          description: Signed out.
+
+  /user/profile:
+    get:
+      summary: The signed-in user's profile
+      operationId: getProfile
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Profile" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+
+  /admin/users/{id}:
+    delete:
+      summary: Delete a user (admin only)
+      operationId: deleteUser
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64, minimum: 1 } }
+      responses:
+        "204":
+          description: Deleted.
+        "400":
+          description: Invalid id.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: invalid user ID, code: VALIDATION_ERROR }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: No such user.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: user not found, code: USER_NOT_FOUND }
