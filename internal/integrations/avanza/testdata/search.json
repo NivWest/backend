@@ -1,0 +1,244 @@
+{
+  "totalNumberOfHits": 5,
+  "hits": [
+    {
+      "type": "STOCK",
+      "title": "Volvo B (VOLV B)",
+      "highlightedTitle": "<mark class=\"bold\">Volvo</mark> B (VOLV B)",
+      "description": "Volvo är verksamt inom fordonsindustrin och fokus…",
+      "highlightedDescription": "<mark class=\"bold\">Volvo</mark> är verksamt…",
+      "path": null,
+      "flagCode": "SE",
+      "orderBookId": "5269",
+      "urlSlugName": "volvo-b",
+      "tradeable": true,
+      "sellable": true,
+      "buyable": true,
+      "price": {
+        "last": "307,70",
+        "currency": "SEK",
+        "todayChangePercent": "−1,12",
+        "todayChangeValue": "−3,50",
+        "todayChangeDirection": -1,
+        "threeMonthsAgoChangePercent": null,
+        "threeMonthsAgoChangeDirection": 0,
+        "spread": "0,16"
+      },
+      "stockSectors": [
+        {
+          "id": 29,
+          "level": 1,
+          "name": "Industri",
+          "englishName": "Industrials",
+          "highlightedName": null
+        },
+        {
+          "id": 6,
+          "level": 2,
+          "name": "Industriella Varor & Tjänster",
+          "englishName": "Industrial Goods & Services",
+          "highlightedName": null
+        },
+        {
+          "id": 125,
+          "level": 3,
+          "name": "Lastbilar & Tunga Fordon",
+          "englishName": "Trucks & Heavy Vehicles",
+          "highlightedName": null
+        }
+      ],
+      "fundTags": [],
+      "marketPlaceName": "Stockholmsbörsen",
+      "subType": null,
+      "highlightedSubType": ""
+    },
+    {
+      "type": "STOCK",
+      "title": "Volvo Car B (VOLCAR B)",
+      "highlightedTitle": "<mark class=\"bold\">Volvo</mark> Car B (VOLCAR B)",
+      "description": "Volvo Car är en global biltillverkare. Bolaget fo…",
+      "highlightedDescription": "<mark class=\"bold\">Volvo</mark> Car är en…",
+      "path": null,
+      "flagCode": "SE",
+      "orderBookId": "1296604",
+      "urlSlugName": "volvo-car-b",
+      "tradeable": true,
+      "sellable": true,
+      "buyable": true,
+      "price": {
+        "last": "10,695",
+        "currency": "SEK",
+        "todayChangePercent": "−24,23",
+        "todayChangeValue": "−3,42",
+        "todayChangeDirection": -1,
+        "threeMonthsAgoChangePercent": null,
+        "threeMonthsAgoChangeDirection": 0,
+        "spread": "0,19"
+      },
+      "stockSectors": [
+        {
+          "id": 24,
+          "level": 1,
+          "name": "Konsumentvaror & Tjänster",
+          "englishName": "Consumer Goods & Services",
+          "highlightedName": null
+        },
+        {
+          "id": 26,
+          "level": 2,
+          "name": "Fordonsindustri",
+          "englishName": "Automobiles",
+          "highlightedName": null
+        },
+        {
+          "id": 68,
+          "level": 3,
+          "name": "Biltillverkare",
+          "englishName": "Automobiles",
+          "highlightedName": null
+        }
+      ],
+      "fundTags": [],
+      "marketPlaceName": "Stockholmsbörsen",
+      "subType": null,
+      "highlightedSubType": ""
+    },
+    {
+      "type": "CERTIFICATE",
+      "title": "BULL VOLVO X9 SG",
+      "highlightedTitle": "BULL <mark class=\"bold\">VOLVO</mark> X9 SG",
+      "description": "",
+      "highlightedDescription": "",
+      "path": null,
+      "flagCode": "SE",
+      "orderBookId": "1360525",
+      "urlSlugName": "bull-volvo-x9-sg",
+      "tradeable": true,
+      "sellable": true,
+      "buyable": true,
+      "price": {
+        "last": "0,029",
+        "currency": "SEK",
+        "todayChangePercent": "−14,71",
+        "todayChangeValue": "−0,005",
+        "todayChangeDirection": -1,
+        "threeMonthsAgoChangePercent": null,
+        "threeMonthsAgoChangeDirection": 0,
+        "spread": null
+      },
+      "stockSectors": [],
+      "fundTags": [],
+      "marketPlaceName": "Nordic MTF",
+      "subType": null,
+      "highlightedSubType": ""
+    },
+    {
+      "type": "WARRANT",
+      "title": "VOLVO6L 374SG",
+      "highlightedTitle": "<mark class=\"bold\">VOLVO</mark>6L 374SG",
+      "description": "",
+      "highlightedDescription": "",
+      "path": null,
+      "flagCode": "SE",
+      "orderBookId": "2326028",
+      "urlSlugName": "volvo6l-374sg",
+      "tradeable": true,
+      "sellable": true,
+      "buyable": true,
+      "price": {
+        "last": "0,01",
+        "currency": "SEK",
+        "todayChangePercent": "0,00",
+        "todayChangeValue": "0,00",
+        "todayChangeDirection": 0,
+        "threeMonthsAgoChangePercent": null,
+        "threeMonthsAgoChangeDirection": 0,
+        "spread": null
+      },
+      "stockSectors": [],
+      "fundTags": [],
+      "marketPlaceName": "Nordic MTF",
+      "subType": "Köpwarrant",
+      "highlightedSubType": ""
+    },
+    {
+      "type": "STOCK",
+      "title": "Volvo A (VOLV A)",
+      "highlightedTitle": "<mark class=\"bold\">Volvo</mark> A (VOLV A)",
+      "description": "Volvo är verksamt inom fordonsindustrin och fokus…",
+      "highlightedDescription": "<mark class=\"bold\">Volvo</mark> är verksamt…",
+      "path": null,
+      "flagCode": "SE",
+      "orderBookId": "5268",
+      "urlSlugName": "volvo-a",
+      "tradeable": true,
+      "sellable": true,
+      "buyable": true,
+      "price": {
+        "last": "308,00",
+        "currency": "SEK",
+        "todayChangePercent": "−1,41",
+        "todayChangeValue": "−4,40",
+        "todayChangeDirection": -1,
+        "threeMonthsAgoChangePercent": null,
+        "threeMonthsAgoChangeDirection": 0,
+        "spread": "0,13"
+      },
+      "stockSectors": [
+        {
+          "id": 29,
+          "level": 1,
+          "name": "Industri",
+          "englishName": "Industrials",
+          "highlightedName": null
+        },
+        {
+          "id": 6,
+          "level": 2,
+          "name": "Industriella Varor & Tjänster",
+          "englishName": "Industrial Goods & Services",
+          "highlightedName": null
+        },
+        {
+          "id": 125,
+          "level": 3,
+          "name": "Lastbilar & Tunga Fordon",
+          "englishName": "Trucks & Heavy Vehicles",
+          "highlightedName": null
+        }
+      ],
+      "fundTags": [],
+      "marketPlaceName": "Stockholmsbörsen",
+      "subType": null,
+      "highlightedSubType": ""
+    }
+  ],
+  "searchQuery": "volvo",
+  "searchFilter": {
+    "types": []
+  },
+  "facets": {
+    "types": [
+      {
+        "type": "STOCK",
+        "count": 4
+      },
+      {
+        "type": "CERTIFICATE",
+        "count": 246
+      },
+      {
+        "type": "WARRANT",
+        "count": 405
+      },
+      {
+        "type": "FAQ",
+        "count": 2
+      }
+    ]
+  },
+  "pagination": {
+    "size": 30,
+    "from": 0
+  }
+}

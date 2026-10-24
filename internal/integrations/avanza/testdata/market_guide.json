@@ -1,0 +1,120 @@
+{
+  "orderbookId": "5247",
+  "name": "Investor B",
+  "isin": "SE0015811963",
+  "instrumentId": "5407",
+  "sectors": [
+    {
+      "sectorId": "51",
+      "sectorName": "Investmentbolag"
+    },
+    {
+      "sectorId": "49",
+      "sectorName": "Investeringar"
+    },
+    {
+      "sectorId": "21",
+      "sectorName": "Finans"
+    }
+  ],
+  "tradable": "BUYABLE_AND_SELLABLE",
+  "listing": {
+    "shortName": "INVE B",
+    "tickerSymbol": "INVE B",
+    "countryCode": "SE",
+    "currency": "SEK",
+    "marketPlaceCode": "XSTO",
+    "marketPlaceName": "Stockholmsbörsen",
+    "marketListName": "Large Cap Stockholm",
+    "tickSizeListId": "2349",
+    "marketTradesAvailable": true
+  },
+  "historicalClosingPrices": {
+    "oneDay": 409.05,
+    "oneWeek": 422.6,
+    "oneMonth": 408.85,
+    "threeMonths": 403.5,
+    "sixMonths": 372.35,
+    "startOfYear": 330.4,
+    "oneYear": 315.6,
+    "threeYears": 200.9,
+    "fiveYears": 199.56,
+    "tenYears": 81.38,
+    "start": 2.83,
+    "startDate": "1984-09-18",
+    "marketMaker": {}
+  },
+  "keyIndicators": {
+    "numberOfOwners": 535869,
+    "shortSellingRatio": 0.0054,
+    "reportDate": "2026-10-16",
+    "directYield": 0.0136,
+    "ordinaryDirectYield": 0.0136,
+    "totalDirectYield": 0.0136,
+    "volatility": 0.1658,
+    "beta": 0.99,
+    "priceEarningsRatio": 5.88,
+    "priceBookRatio": 1.15,
+    "evEbitRatio": 6.16,
+    "returnOnEquity": 0.1952,
+    "returnOnTotalAssets": 0.1697,
+    "returnOnCapitalEmployed": 0.179,
+    "equityRatio": 0.8692,
+    "capitalTurnover": 0.0,
+    "marketCapital": {
+      "value": 1257197898197.0,
+      "currency": "SEK"
+    },
+    "equityPerShare": {
+      "value": 358.25,
+      "currency": "SEK"
+    },
+    "turnoverPerShare": {
+      "value": 0.0,
+      "currency": "SEK"
+    },
+    "earningsPerShare": {
+      "value": 70.09,
+      "currency": "SEK"
+    },
+    "operatingCashFlow": {
+      "value": 26453000000.0,
+      "currency": "SEK"
+    },
+    "dividend": {
+      "exDate": "2026-11-06",
+      "paymentDate": "2026-11-12",
+      "amount": 1.6,
+      "currencyCode": "SEK",
+      "exDateStatus": "FUTURE"
+    },
+    "dividendsPerYear": 2,
+    "nextReport": {
+      "date": "2027-01-22",
+      "reportType": "ANNUAL",
+      "isConfirmed": true
+    },
+    "previousReport": {
+      "date": "2026-10-16",
+      "reportType": "INTERIM",
+      "isConfirmed": true
+    }
+  },
+  "quote": {
+    "buy": 411.5,
+    "sell": 411.65,
+    "last": 412.0,
+    "highest": 412.0,
+    "lowest": 407.55,
+    "change": 2.95,
+    "changePercent": 0.72,
+    "spread": 0.04,
+    "timeOfLast": 1792769392000,
+    "totalValueTraded": 1083912728.7,
+    "totalVolumeTraded": 2640164.0,
+    "updated": 1792771200617,
+    "volumeWeightedAveragePrice": 410.55,
+    "isRealTime": false
+  },
+  "type": "STOCK"
+}
