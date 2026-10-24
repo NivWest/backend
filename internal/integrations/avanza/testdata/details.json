@@ -1,0 +1,97 @@
+{
+  "stock": {
+    "preferred": false,
+    "depositoryReceipt": false,
+    "numberOfShares": 1821936744
+  },
+  "sectors": [
+    {
+      "sectorId": "51",
+      "sectorName": "Investmentbolag"
+    },
+    {
+      "sectorId": "49",
+      "sectorName": "Investeringar"
+    },
+    {
+      "sectorId": "21",
+      "sectorName": "Finans"
+    }
+  ],
+  "company": {
+    "companyId": "194",
+    "description": "Investor är ett svenskt investment- och holdingbolag som förvaltar aktieinnehav och helägda bolag genom långsiktigt ägande och aktivt styrelseengagemang. Bolaget investerar i noterade bolag, onoterade verksamheter och kapitalfonder, och samarbetar med företagsledningar för värdeutveckling på marknader internationellt. Investor grundades 1916 och har sitt huvudkontor i Stockholm, Sverige.",
+    "ceo": "Christian Cederholm",
+    "chairman": "Jacob Wallenberg",
+    "totalNumberOfShares": 3068700120,
+    "homepage": "https://www.investorab.com/sv/investerare-media/",
+    "countryCode": "SE"
+  },
+  "keyIndicators": {
+    "numberOfOwners": 535869,
+    "shortSellingRatio": 0.0054,
+    "reportDate": "2026-10-16",
+    "ordinaryDirectYield": 0.0136,
+    "totalDirectYield": 0.0136,
+    "volatility": 0.1658,
+    "beta": 0.99,
+    "priceEarningsRatio": 5.88,
+    "priceBookRatio": 1.15,
+    "evEbitRatio": 6.16,
+    "returnOnEquity": 0.1952,
+    "returnOnTotalAssets": 0.1697,
+    "returnOnCapitalEmployed": 0.179,
+    "equityRatio": 0.8692,
+    "capitalTurnover": 0.0,
+    "marketCapital": {
+      "value": 1257197898197.0,
+      "currency": "SEK"
+    },
+    "equityPerShare": {
+      "value": 358.25,
+      "currency": "SEK"
+    },
+    "turnoverPerShare": {
+      "value": 0.0,
+      "currency": "SEK"
+    },
+    "earningsPerShare": {
+      "value": 70.09,
+      "currency": "SEK"
+    },
+    "operatingCashFlow": {
+      "value": 26453000000.0,
+      "currency": "SEK"
+    },
+    "dividend": {
+      "exDate": "2026-11-06",
+      "paymentDate": "2026-11-12",
+      "amount": 1.6,
+      "currencyCode": "SEK",
+      "exDateStatus": "FUTURE"
+    },
+    "dividendsPerYear": 2,
+    "nextReport": {
+      "date": "2027-01-22",
+      "reportType": "ANNUAL",
+      "isConfirmed": true
+    },
+    "previousReport": {
+      "date": "2026-10-16",
+      "reportType": "INTERIM",
+      "isConfirmed": true
+    }
+  },
+  "companyEvents": [
+    {
+      "date": "2026-01-22",
+      "type": "ANNUAL_REPORT",
+      "isConfirmed": true
+    },
+    {
+      "date": "2026-07-16",
+      "type": "INTERIM_REPORT",
+      "isConfirmed": true
+    }
+  ]
+}

@@ -14,24 +14,32 @@ import (
 )
 
 const (
-	baseURL    = "https://www.avanza.se"
-	searchPath = "/_api/search/filtered-search"
+	defaultBaseURL = "https://www.avanza.se"
+	searchPath     = "/_api/search/filtered-search"
+	defaultTimeout = 10 * time.Second
+
+	// maxResponseBytes caps how much of an upstream body is read.
+	maxResponseBytes = 8 << 20
+	// maxErrorBodyBytes caps how much of an upstream body ends up in an error message.
+	maxErrorBodyBytes = 200
 )
 
+// Client is the legacy raw-bytes Avanza client. New code uses MarketProvider.
 type Client struct {
 	httpClient *http.Client
 }
 
 func NewClient(httpClient *http.Client) *Client {
-	if httpClient == nil {
-		httpClient = &http.Client{
-			Timeout: 10 * time.Second,
-		}
-	}
-
 	return &Client{
-		httpClient: httpClient,
+		httpClient: defaultHTTPClient(httpClient),
 	}
+}
+
+func defaultHTTPClient(httpClient *http.Client) *http.Client {
+	if httpClient == nil {
+		return &http.Client{Timeout: defaultTimeout}
+	}
+	return httpClient
 }
 
 func (c *Client) do(
@@ -40,12 +48,35 @@ func (c *Client) do(
 	path string,
 	body []byte,
 ) ([]byte, error) {
-	req, err := http.NewRequestWithContext(
-		ctx,
-		method,
-		baseURL+path,
-		bytes.NewReader(body),
-	)
+	return do(ctx, c.httpClient, defaultBaseURL, method, path, body)
+}
+
+// statusError is a non-2xx upstream answer. Body holds at most maxErrorBodyBytes of the response.
+type statusError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *statusError) Error() string {
+	return fmt.Sprintf("avanza returned HTTP %d: %s", e.StatusCode, e.Body)
+}
+
+// do sends one request to baseURL+path with browser-like headers and returns the response body.
+// Non-2xx answers return a *statusError.
+func do(
+	ctx context.Context,
+	httpClient *http.Client,
+	baseURL string,
+	method string,
+	path string,
+	body []byte,
+) ([]byte, error) {
+	var reqBody io.Reader
+	if body != nil {
+		reqBody = bytes.NewReader(body)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -63,23 +94,22 @@ func (c *Client) do(
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request Avanza: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
 
-		return nil, fmt.Errorf(
-			"avanza returned HTTP %d: %s",
-			resp.StatusCode,
-			string(responseBody),
-		)
+		return nil, &statusError{
+			StatusCode: resp.StatusCode,
+			Body:       string(bytes.ToValidUTF8(snippet, nil)),
+		}
 	}
 
-	result, err := io.ReadAll(resp.Body)
+	result, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
 		return nil, fmt.Errorf("read Avanza response: %w", err)
 	}
