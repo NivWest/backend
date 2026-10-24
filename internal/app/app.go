@@ -1,6 +1,11 @@
 package app
 
 import (
+	"context"
+	"fmt"
+	"net/http"
+	"time"
+
 	"backend/internal/config"
 	"backend/internal/domain"
 	"backend/internal/handlers"
@@ -8,8 +13,6 @@ import (
 	"backend/internal/integrations/database"
 	"backend/internal/repository"
 	"backend/internal/services"
-	"fmt"
-	"net/http"
 )
 
 type App struct {
@@ -65,7 +68,14 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	watchlistService := services.NewWatchlistService(watchlistRepo)
 	watchlistHandler := handlers.NewWatchlistHandler(watchlistService, authRepo)
 
+	// The guest purger runs until closeApp cancels its context: once now, then every GuestPurgeInterval.
+	guestRepo := repository.NewGuestRepository(db)
+	purger := services.NewGuestPurger(guestRepo, domain.GuestRetention, time.Now)
+	purgeCtx, cancelPurge := context.WithCancel(context.Background())
+	go purger.Run(purgeCtx, domain.GuestPurgeInterval)
+
 	closeApp := func() error {
+		cancelPurge()
 		sqlDB, err := db.DB()
 		if err != nil {
 			return fmt.Errorf("get sql database: %w", err)
