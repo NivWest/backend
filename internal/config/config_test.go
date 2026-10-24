@@ -52,3 +52,43 @@ func TestLoad_FallsBackToDefaultsOnInvalidValues(t *testing.T) {
 		t.Errorf("OAuthStateTTL = %v, want default 15m", cfg.Auth.OAuthStateTTL)
 	}
 }
+
+func TestLoad_GuestAuthDefaults(t *testing.T) {
+	t.Setenv("AUTH_GUEST_ENABLED", "")
+	t.Setenv("AUTH_GUEST_SESSION_TTL", "")
+	t.Setenv("AUTH_GUEST_RATE_LIMIT_PER_MINUTE", "")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Auth.GuestEnabled {
+		t.Error("Auth.GuestEnabled = true, want default false")
+	}
+	if cfg.Auth.GuestSessionTTL != 24*time.Hour {
+		t.Errorf("Auth.GuestSessionTTL = %v, want default 24h", cfg.Auth.GuestSessionTTL)
+	}
+	if cfg.Auth.GuestRateLimitPerMinute != 10 {
+		t.Errorf("Auth.GuestRateLimitPerMinute = %d, want default 10", cfg.Auth.GuestRateLimitPerMinute)
+	}
+}
+
+func TestLoad_GuestAuthOverrides(t *testing.T) {
+	t.Setenv("AUTH_GUEST_ENABLED", "true")
+	t.Setenv("AUTH_GUEST_SESSION_TTL", "90m")
+	t.Setenv("AUTH_GUEST_RATE_LIMIT_PER_MINUTE", "3")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.Auth.GuestEnabled {
+		t.Error("Auth.GuestEnabled = false, want true")
+	}
+	if cfg.Auth.GuestSessionTTL != 90*time.Minute {
+		t.Errorf("Auth.GuestSessionTTL = %v, want 90m", cfg.Auth.GuestSessionTTL)
+	}
+	if cfg.Auth.GuestRateLimitPerMinute != 3 {
+		t.Errorf("Auth.GuestRateLimitPerMinute = %d, want 3", cfg.Auth.GuestRateLimitPerMinute)
+	}
+}
