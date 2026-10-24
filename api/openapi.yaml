@@ -27,7 +27,7 @@ components:
         code:
           type: string
           description: Stable UPPER_SNAKE code.
-          examples: [UNAUTHENTICATED, FORBIDDEN, RATE_LIMITED, VALIDATION_ERROR, USER_NOT_FOUND, INTERNAL_ERROR]
+          examples: [UNAUTHENTICATED, FORBIDDEN, RATE_LIMITED, VALIDATION_ERROR, USER_NOT_FOUND, INSTRUMENT_NOT_FOUND, MARKET_DATA_UNAVAILABLE, INTERNAL_ERROR]
 
     Role:
       type: string
@@ -59,15 +59,20 @@ components:
     Features:
       type: object
       description: Optional switches that are enabled on this deployment.
-      required: [guest_auth]
+      required: [guest_auth, sim_control]
       properties:
         guest_auth:
           type: boolean
           description: True when AUTH_GUEST_ENABLED is on and POST /auth/guest is registered.
+        sim_control:
+          type: boolean
+          description: |
+            True when the dev/test price-pinning routes under /sim are mounted, i.e. MARKET_DATA_PROVIDER=simulated
+            and MARKET_SIM_CONTROL_ENABLED=true. Must never be true in production.
 
     Health:
       type: object
-      required: [status, version, features]
+      required: [status, version, features, market_data_provider]
       properties:
         status:
           type: string
@@ -76,6 +81,149 @@ components:
           type: string
         features:
           $ref: "#/components/schemas/Features"
+        market_data_provider:
+          type: string
+          enum: [avanza, simulated]
+          description: The active market data adapter (MARKET_DATA_PROVIDER, backend default avanza).
+
+    InstrumentSummary:
+      type: object
+      description: One instrument search hit. Prices are in `currency`, rounded half-up to 2 decimals.
+      required: [orderbook_id, symbol, name, currency, market, last_price, change_percent]
+      properties:
+        orderbook_id:
+          type: string
+          description: Stable instrument id. Simulated instruments start with `SIM-`.
+          examples: [SIM-FJRD, "5361"]
+        symbol:
+          type: string
+          description: Ticker, e.g. FJRD. May be empty when the upstream has none.
+        name:
+          type: string
+          examples: [Fjord Robotics]
+        currency:
+          type: string
+          examples: [SEK]
+        market:
+          type: string
+          description: Listing venue. `Simulated` for the simulated market.
+          examples: [Simulated, Stockholmsbörsen]
+        last_price:
+          type: number
+        change_percent:
+          type: number
+          description: Change against the price 24 hours earlier (simulated) or the previous close (Avanza), in percent, 2 decimals.
+
+    InstrumentSearchResponse:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          description: Best match first, at most 20. Empty array when nothing matches.
+          items: { $ref: "#/components/schemas/InstrumentSummary" }
+        next_cursor:
+          type: [string, "null"]
+          description: Always null for now; search is not paginated.
+
+    Quote:
+      type: object
+      description: |
+        Latest price. On the simulated market `bid = last × 0.999` and `ask = last × 1.001` (20 bps spread),
+        each rounded half-up to 2 decimals, so `0 < bid < last < ask`.
+      required: [orderbook_id, symbol, last, bid, ask, change_percent, currency, updated_at]
+      properties:
+        orderbook_id: { type: string }
+        symbol: { type: string }
+        last: { type: number }
+        bid: { type: number }
+        ask: { type: number }
+        change_percent: { type: number }
+        currency: { type: string }
+        updated_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC.
+
+    KeyIndicators:
+      type: object
+      description: null means the provider has no value (e.g. no P/E for a loss-making company).
+      required: [pe_ratio, dividend_yield_pct, market_cap]
+      properties:
+        pe_ratio:
+          type: [number, "null"]
+          description: Price / earnings per share, 2 decimals.
+        dividend_yield_pct:
+          type: [number, "null"]
+          description: Annual dividend / last price × 100, 2 decimals (e.g. 3.25 means 3.25 %).
+        market_cap:
+          type: [number, "null"]
+          description: Market capitalisation in the instrument's currency.
+
+    InstrumentDetails:
+      type: object
+      required: [orderbook_id, symbol, name, currency, market, sector, description, last_price, change_percent, key_indicators]
+      properties:
+        orderbook_id: { type: string }
+        symbol: { type: string }
+        name: { type: string }
+        currency: { type: string }
+        market: { type: string }
+        sector:
+          type: string
+          description: May be empty when the upstream has none.
+        description:
+          type: string
+          description: Company description. Non-empty for every simulated instrument.
+        last_price: { type: number }
+        change_percent: { type: number }
+        key_indicators: { $ref: "#/components/schemas/KeyIndicators" }
+
+    CandlePeriod:
+      type: string
+      enum: ["1d", "1w", "1m", "3m", "1y"]
+      description: |
+        Chart window ending now, with its bar size:
+        1d = 24 h of 15-minute bars, 1w = 7 days of 1-hour bars, 1m = 30 days of daily bars,
+        3m = 90 days of daily bars, 1y = 365 days of weekly bars. The last bar may be partial.
+
+    Candle:
+      type: object
+      description: One OHLCV bar. `l ≤ min(o, c)` and `h ≥ max(o, c)`.
+      required: [t, o, h, l, c, v]
+      properties:
+        t:
+          type: string
+          format: date-time
+          description: Bar start, RFC 3339 UTC.
+        o: { type: number }
+        h: { type: number }
+        l: { type: number }
+        c: { type: number }
+        v:
+          type: integer
+          format: int64
+          description: Volume in shares.
+
+    CandlesResponse:
+      type: object
+      required: [orderbook_id, period, candles]
+      properties:
+        orderbook_id: { type: string }
+        period: { $ref: "#/components/schemas/CandlePeriod" }
+        candles:
+          type: array
+          description: Strictly ascending `t`.
+          items: { $ref: "#/components/schemas/Candle" }
+
+    SimPriceRequest:
+      type: object
+      required: [price]
+      properties:
+        price:
+          type: number
+          exclusiveMinimum: 0
+          description: Pinned last price; stored rounded half-up to 2 decimals.
 
   responses:
     Unauthenticated:
@@ -90,6 +238,39 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
           example: { error: forbidden, code: FORBIDDEN }
+    ValidationError:
+      description: Invalid input.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: period must be one of 1d, 1w, 1m, 3m, 1y, code: VALIDATION_ERROR }
+    InstrumentNotFound:
+      description: Unknown orderbook id.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: instrument not found, code: INSTRUMENT_NOT_FOUND }
+    MarketDataUnavailable:
+      description: The market data upstream failed.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: market data unavailable, code: MARKET_DATA_UNAVAILABLE }
+    RateLimited:
+      description: Too many requests from this IP (5 per second, burst 10, shared by every /market route).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: too many requests, please try again later, code: RATE_LIMITED }
+
+  parameters:
+    OrderbookID:
+      name: orderbook_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+      examples:
+        simulated: { value: SIM-FJRD }
 
 paths:
   /health:
@@ -102,7 +283,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Health" }
-              example: { status: ok, version: 0.1.0, features: { guest_auth: true } }
+              example: { status: ok, version: 0.1.0, market_data_provider: simulated, features: { guest_auth: true, sim_control: true } }
 
   /auth/login:
     get:
@@ -215,3 +396,135 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
               example: { error: user not found, code: USER_NOT_FOUND }
+
+  # Market data (story NW-03). Public (no session needed) and rate-limited per client IP.
+  # Served by the provider chosen with MARKET_DATA_PROVIDER (avanza | simulated).
+  /market/instruments:
+    get:
+      summary: Search instruments
+      operationId: searchInstruments
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Matched case-insensitively against symbol, name and orderbook id. Trimmed; blank is rejected.
+          schema: { type: string, minLength: 1 }
+          example: fjord
+      responses:
+        "200":
+          description: Matches, best first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InstrumentSearchResponse" }
+              example:
+                items:
+                  - { orderbook_id: SIM-FJRD, symbol: FJRD, name: Fjord Robotics, currency: SEK, market: Simulated, last_price: 142.37, change_percent: 1.25 }
+                next_cursor: null
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "502":
+          $ref: "#/components/responses/MarketDataUnavailable"
+
+  /market/instruments/{orderbook_id}:
+    get:
+      summary: Instrument details and key indicators
+      operationId: getInstrumentDetails
+      parameters:
+        - $ref: "#/components/parameters/OrderbookID"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InstrumentDetails" }
+        "404":
+          $ref: "#/components/responses/InstrumentNotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "502":
+          $ref: "#/components/responses/MarketDataUnavailable"
+
+  /market/instruments/{orderbook_id}/quote:
+    get:
+      summary: Latest quote with bid and ask
+      operationId: getQuote
+      parameters:
+        - $ref: "#/components/parameters/OrderbookID"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Quote" }
+              example: { orderbook_id: SIM-FJRD, symbol: FJRD, last: 100.00, bid: 99.90, ask: 100.10, change_percent: -0.42, currency: SEK, updated_at: "2026-10-25T09:41:00Z" }
+        "404":
+          $ref: "#/components/responses/InstrumentNotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "502":
+          $ref: "#/components/responses/MarketDataUnavailable"
+
+  /market/instruments/{orderbook_id}/candles:
+    get:
+      summary: OHLCV candles for a chart period
+      operationId: getCandles
+      parameters:
+        - $ref: "#/components/parameters/OrderbookID"
+        - name: period
+          in: query
+          required: true
+          schema: { $ref: "#/components/schemas/CandlePeriod" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CandlesResponse" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/InstrumentNotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "502":
+          $ref: "#/components/responses/MarketDataUnavailable"
+
+  # Simulated market control (story NW-03). DEV/TEST ONLY: the routes exist only when MARKET_DATA_PROVIDER=simulated
+  # and MARKET_SIM_CONTROL_ENABLED=true (otherwise 404); no session needed, no rate limit. Pins are global and in memory.
+  /sim/instruments/{orderbook_id}/price:
+    put:
+      summary: Pin the last price of a simulated instrument
+      description: Until the pin is cleared, quote/search/details report exactly this last price (bid/ask follow the 20 bps spread). Candles ignore pins.
+      operationId: pinSimPrice
+      parameters:
+        - $ref: "#/components/parameters/OrderbookID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SimPriceRequest" }
+            example: { price: 100 }
+      responses:
+        "204":
+          description: Pinned.
+        "400":
+          description: Missing, malformed or non-positive price.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: price must be greater than 0, code: VALIDATION_ERROR }
+        "404":
+          $ref: "#/components/responses/InstrumentNotFound"
+    delete:
+      summary: Clear the pinned price
+      description: Idempotent. The price follows the simulated path again.
+      operationId: clearSimPrice
+      parameters:
+        - $ref: "#/components/parameters/OrderbookID"
+      responses:
+        "204":
+          description: Cleared (or there was no pin).
+        "404":
+          $ref: "#/components/responses/InstrumentNotFound"

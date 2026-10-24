@@ -75,6 +75,9 @@ func NewProfileResponse(u *models.User) ProfileResponse {
 // Features lists the optional switches enabled on this deployment (api/openapi.yaml#/components/schemas/Features).
 type Features struct {
 	GuestAuth bool `json:"guest_auth"`
+	// SimControl is true when the /sim price-pinning routes are mounted
+	// (MARKET_DATA_PROVIDER=simulated and MARKET_SIM_CONTROL_ENABLED=true).
+	SimControl bool `json:"sim_control"`
 }
 
 // HealthResponse is the body of GET /health (api/openapi.yaml#/components/schemas/Health).
@@ -82,6 +85,8 @@ type HealthResponse struct {
 	Status   string   `json:"status"`
 	Version  string   `json:"version"`
 	Features Features `json:"features"`
+	// MarketDataProvider is the active market data adapter: "avanza" or "simulated" (MARKET_DATA_PROVIDER).
+	MarketDataProvider string `json:"market_data_provider"`
 }
 
 // GuestRepository removes expired guest accounts.
