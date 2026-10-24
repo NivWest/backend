@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"math/rand"
 	"time"
@@ -11,17 +10,17 @@ import (
 )
 
 type OrderService struct {
-	repo          domain.OrderRepository
-	stockProvider domain.StockProvider
+	repo     domain.OrderRepository
+	provider domain.MarketDataProvider
 	// sleep simulates execution latency. It is a field so tests can replace it.
 	sleep func(time.Duration)
 }
 
-func NewOrderService(repo domain.OrderRepository, stockProvider domain.StockProvider) *OrderService {
+func NewOrderService(repo domain.OrderRepository, provider domain.MarketDataProvider) *OrderService {
 	return &OrderService{
-		repo:          repo,
-		stockProvider: stockProvider,
-		sleep:         time.Sleep,
+		repo:     repo,
+		provider: provider,
+		sleep:    time.Sleep,
 	}
 }
 
@@ -30,22 +29,18 @@ func (s *OrderService) ExecuteOrder(ctx context.Context, userID uint, req domain
 	latency := time.Duration(rand.Intn(450)+50) * time.Millisecond
 	s.sleep(latency)
 
-	// 2. Fetch real-time quote
-	quoteBytes, err := s.stockProvider.GetStockQuote(ctx, req.Symbol)
+	// 2. Fetch real-time quote. Orders still carry only a symbol, which is passed as the instrument id
+	// as before; identifying instruments by orderbook_id in trading is NW-04's job.
+	quote, err := s.provider.Quote(ctx, req.Symbol)
 	if err != nil {
 		return errors.New("failed to fetch live stock quote for execution")
 	}
 
-	var quote avanzaQuote // Reuse the unexported struct from portfolio_service or define it here
-	if err := json.Unmarshal(quoteBytes, &quote); err != nil {
-		return errors.New("failed to parse live stock quote")
-	}
-
-	if quote.LastPrice <= 0 {
+	if quote.Last <= 0 {
 		return errors.New("invalid stock price received")
 	}
 
-	price := quote.LastPrice
+	price := quote.Last
 
 	// 3. Friction Logic: Slippage penalty for high volume
 	if req.Quantity > 100 { // Arbitrary high volume threshold

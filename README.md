@@ -1,12 +1,12 @@
 # NivWest Backend
 
-Go backend for the NivWest stock simulator. The API manages simulator users and proxies stock search, quote, details, and price-chart data from Avanza. PostgreSQL is used for application data and is automatically migrated when the server starts.
+Go backend for the NivWest stock simulator. The API manages simulator users and serves market data (instrument search, quotes, details and candles) from a pluggable provider: live Avanza data or a deterministic simulated market. PostgreSQL is used for application data and is automatically migrated when the server starts.
 
 ## Requirements
 
 - Go 1.25 or newer
 - Docker and Docker Compose
-- Network access to Avanza for stock endpoints
+- Network access to Avanza for market data when `MARKET_DATA_PROVIDER=avanza` (the default)
 
 ## Quick start
 
@@ -69,7 +69,9 @@ Configuration is read from environment variables and, when present, `.env`. Inva
 | `REDIS_ADDR` | `localhost:6379` | Redis address reserved for future use |
 | `REDIS_PASSWORD` | empty | Redis password reserved for future use |
 | `REDIS_DB` | `0` | Redis database reserved for future use |
-| `AVANZA_BASE_URL` | `https://www.avanza.se` | Configured upstream URL |
+| `MARKET_DATA_PROVIDER` | `avanza` | Market data source: `avanza` (live) or `simulated` (deterministic, offline) |
+| `MARKET_SIM_CONTROL_ENABLED` | `false` | Dev/test only: with `MARKET_DATA_PROVIDER=simulated`, mounts the price-pinning routes under `/api/v1/sim` |
+| `AVANZA_BASE_URL` | `https://www.avanza.se` | Avanza upstream URL |
 | `AVANZA_TIMEOUT` | `10s` | Avanza request timeout |
 | `RATE_LIMIT_REQUESTS_PER_SECOND` | `10` | Reserved rate-limit setting |
 | `RATE_LIMIT_BURST` | `20` | Reserved rate-limit setting |
@@ -81,7 +83,7 @@ Configuration is read from environment variables and, when present, `.env`. Inva
 | `AUTH_OAUTH_STATE_TTL` | `15m` | OAuth state and PKCE lifetime |
 | `AUTH_COOKIE_SECURE` | `false` | Set `true` when serving over HTTPS |
 
-The current Avanza integration uses `https://www.avanza.se` directly. `AVANZA_BASE_URL` is loaded but is not yet applied to outbound requests. Stock routes have a per-IP limiter of five requests per second with a burst of ten.
+The Avanza provider sends its requests to `AVANZA_BASE_URL`. Market data routes have a per-IP limiter of five requests per second with a burst of ten.
 
 ## API
 
@@ -116,23 +118,38 @@ curl http://localhost:8080/api/v1/users/1
 
 User creation returns `201 Created`. Duplicate Google IDs or email addresses return `409 Conflict`.
 
-### Stocks
+### Market data
 
-Search Avanza instruments:
+Market data routes are public and served by the provider selected with `MARKET_DATA_PROVIDER`. Instruments are identified by their orderbook ID (an Avanza orderbook ID, or a `SIM-…` ID on the simulated market).
 
-```sh
-curl 'http://localhost:8080/api/v1/stocks/search?q=volvo'
-```
-
-Get a quote, details, or price chart by Avanza order book ID:
+Search instruments by symbol, name or orderbook ID:
 
 ```sh
-curl 'http://localhost:8080/api/v1/stocks/quote?orderbookID=12345'
-curl 'http://localhost:8080/api/v1/stocks/details?orderbookID=12345'
-curl 'http://localhost:8080/api/v1/stocks/chart?orderbookID=12345&timePeriod=one_year'
+curl 'http://localhost:8080/api/v1/market/instruments?q=volvo'
 ```
 
-Stock endpoint errors are returned as JSON with an `error` field. Responses from Avanza are passed through as JSON.
+Get details, the latest quote, or OHLCV candles (`period` is one of `1d`, `1w`, `1m`, `3m`, `1y`):
+
+```sh
+curl 'http://localhost:8080/api/v1/market/instruments/5269'
+curl 'http://localhost:8080/api/v1/market/instruments/5269/quote'
+curl 'http://localhost:8080/api/v1/market/instruments/5269/candles?period=1m'
+```
+
+Responses use the provider-neutral shapes in `api/openapi.yaml`. Errors are JSON with `error` and `code` fields: `400 VALIDATION_ERROR`, `404 INSTRUMENT_NOT_FOUND` or `502 MARKET_DATA_UNAVAILABLE`.
+
+### Simulated market control (dev/test only)
+
+With `MARKET_DATA_PROVIDER=simulated` and `MARKET_SIM_CONTROL_ENABLED=true`, a simulated instrument's last price can be pinned: quotes, search and details then report exactly that price, and orders are priced from it. These routes have no auth and no rate limit; never enable them in production.
+
+```sh
+curl -X PUT 'http://localhost:8080/api/v1/sim/instruments/SIM-FJRD/price' \
+  -H 'Content-Type: application/json' \
+  -d '{"price":100}'
+curl -X DELETE 'http://localhost:8080/api/v1/sim/instruments/SIM-FJRD/price'
+```
+
+Both return `204 No Content`. Unknown IDs return `404`, and the routes do not exist (`404`) unless both variables are set.
 
 ## Project structure
 
@@ -142,7 +159,7 @@ internal/app/             Application wiring and lifecycle
 internal/config/          Environment configuration
 internal/domain/          Domain contracts and errors
 internal/handlers/        HTTP handlers and route registration
-internal/integrations/    PostgreSQL and Avanza integrations
+internal/integrations/    PostgreSQL, Avanza and simulated market integrations
 internal/middleware/      HTTP middleware
 internal/models/          GORM persistence models
 internal/repository/      Database repositories

@@ -3,14 +3,10 @@ package avanza
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 const (
@@ -24,31 +20,12 @@ const (
 	maxErrorBodyBytes = 200
 )
 
-// Client is the legacy raw-bytes Avanza client. New code uses MarketProvider.
-type Client struct {
-	httpClient *http.Client
-}
-
-func NewClient(httpClient *http.Client) *Client {
-	return &Client{
-		httpClient: defaultHTTPClient(httpClient),
-	}
-}
-
+// defaultHTTPClient returns httpClient, or a client with defaultTimeout when it is nil.
 func defaultHTTPClient(httpClient *http.Client) *http.Client {
 	if httpClient == nil {
 		return &http.Client{Timeout: defaultTimeout}
 	}
 	return httpClient
-}
-
-func (c *Client) do(
-	ctx context.Context,
-	method string,
-	path string,
-	body []byte,
-) ([]byte, error) {
-	return do(ctx, c.httpClient, defaultBaseURL, method, path, body)
 }
 
 // statusError is a non-2xx upstream answer. Body holds at most maxErrorBodyBytes of the response.
@@ -115,89 +92,4 @@ func do(
 	}
 
 	return result, nil
-}
-
-func (c *Client) Search(
-	ctx context.Context,
-	query string,
-) ([]byte, error) {
-	payload := SearchRequest{
-		Query: query,
-		SearchFilter: SearchFilter{
-			Types: []string{},
-		},
-		ScreenSize:      "DESKTOP",
-		OriginPath:      "/start",
-		OriginPlatform:  "PWA",
-		SearchSessionID: uuid.NewString(),
-		Pagination: Pagination{
-			From: 0,
-			Size: 30,
-		},
-	}
-
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("marshal search payload: %w", err)
-	}
-
-	return c.do(
-		ctx,
-		http.MethodPost,
-		searchPath,
-		body,
-	)
-}
-
-func (c *Client) GetPriceChart(
-	ctx context.Context,
-	orderbookID string,
-	timePeriod string,
-) ([]byte, error) {
-	path := fmt.Sprintf(
-		"/_api/price-chart/stock/%s/compare/1002994?timePeriod=%s",
-		url.PathEscape(orderbookID),
-		url.QueryEscape(timePeriod),
-	)
-
-	return c.do(
-		ctx,
-		http.MethodGet,
-		path,
-		nil,
-	)
-}
-
-func (c *Client) GetStockDetails(
-	ctx context.Context,
-	orderbookID string,
-) ([]byte, error) {
-	path := fmt.Sprintf(
-		"/_api/stock-guide/%s/details",
-		url.PathEscape(orderbookID),
-	)
-
-	return c.do(
-		ctx,
-		http.MethodGet,
-		path,
-		nil,
-	)
-}
-
-func (c *Client) GetStockQuote(
-	ctx context.Context,
-	orderbookID string,
-) ([]byte, error) {
-	path := fmt.Sprintf(
-		"/_api/stock-guide/%s/quote",
-		url.PathEscape(orderbookID),
-	)
-
-	return c.do(
-		ctx,
-		http.MethodGet,
-		path,
-		nil,
-	)
 }

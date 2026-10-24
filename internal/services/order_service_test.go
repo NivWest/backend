@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"math"
-	"os"
 	"testing"
 	"time"
 
@@ -14,7 +13,7 @@ import (
 )
 
 // newTestOrderService builds an OrderService with the simulated latency disabled.
-func newTestOrderService(repo domain.OrderRepository, provider domain.StockProvider) *OrderService {
+func newTestOrderService(repo domain.OrderRepository, provider domain.MarketDataProvider) *OrderService {
 	s := NewOrderService(repo, provider)
 	s.sleep = func(time.Duration) {}
 	return s
@@ -39,7 +38,7 @@ func TestOrderService_ExecuteOrder_PricingAndSlippage(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := &testutil.OrderRepo{}
-			provider := &testutil.StockProvider{GetStockQuoteFn: testutil.QuoteJSON(`{"last":200}`)}
+			provider := &testutil.MarketProvider{QuoteFn: testutil.FixedQuote(domain.Quote{Last: 200})}
 			svc := newTestOrderService(repo, provider)
 
 			err := svc.ExecuteOrder(context.Background(), 7, domain.OrderRequest{
@@ -67,7 +66,7 @@ func TestOrderService_ExecuteOrder_PricingAndSlippage(t *testing.T) {
 
 func TestOrderService_ExecuteOrder_SimulatesLatency(t *testing.T) {
 	var slept time.Duration
-	svc := NewOrderService(&testutil.OrderRepo{}, &testutil.StockProvider{GetStockQuoteFn: testutil.QuoteJSON(`{"last":10}`)})
+	svc := NewOrderService(&testutil.OrderRepo{}, &testutil.MarketProvider{QuoteFn: testutil.FixedQuote(domain.Quote{Last: 10})})
 	svc.sleep = func(d time.Duration) { slept = d }
 
 	if err := svc.ExecuteOrder(context.Background(), 1, domain.OrderRequest{Symbol: "X", Type: "BUY", Quantity: 1}); err != nil {
@@ -83,38 +82,34 @@ func TestOrderService_ExecuteOrder_Errors(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		quote    func(context.Context, string) ([]byte, error)
+		quote    func(context.Context, string) (domain.Quote, error)
 		repo     *testutil.OrderRepo
 		wantErr  string
 		wantExec bool
 	}{
 		{
-			name:    "quote fetch fails",
-			quote:   func(context.Context, string) ([]byte, error) { return nil, errors.New("upstream down") },
+			name: "quote fetch fails",
+			quote: func(context.Context, string) (domain.Quote, error) {
+				return domain.Quote{}, errors.New("upstream down")
+			},
 			repo:    &testutil.OrderRepo{},
 			wantErr: "failed to fetch live stock quote for execution",
 		},
 		{
-			name:    "quote is not JSON",
-			quote:   testutil.QuoteJSON(`not-json`),
-			repo:    &testutil.OrderRepo{},
-			wantErr: "failed to parse live stock quote",
-		},
-		{
 			name:    "quote price is zero",
-			quote:   testutil.QuoteJSON(`{"last":0}`),
+			quote:   testutil.FixedQuote(domain.Quote{Last: 0}),
 			repo:    &testutil.OrderRepo{},
 			wantErr: "invalid stock price received",
 		},
 		{
 			name:    "quote price is negative",
-			quote:   testutil.QuoteJSON(`{"last":-5}`),
+			quote:   testutil.FixedQuote(domain.Quote{Last: -5}),
 			repo:    &testutil.OrderRepo{},
 			wantErr: "invalid stock price received",
 		},
 		{
 			name:  "stock registration fails",
-			quote: testutil.QuoteJSON(`{"last":10}`),
+			quote: testutil.FixedQuote(domain.Quote{Last: 10}),
 			repo: &testutil.OrderRepo{EnsureStockFn: func(context.Context, string, string) (*models.Stock, error) {
 				return nil, errors.New("db down")
 			}},
@@ -122,7 +117,7 @@ func TestOrderService_ExecuteOrder_Errors(t *testing.T) {
 		},
 		{
 			name:  "transaction error is propagated",
-			quote: testutil.QuoteJSON(`{"last":10}`),
+			quote: testutil.FixedQuote(domain.Quote{Last: 10}),
 			repo: &testutil.OrderRepo{ExecuteTransactionFn: func(context.Context, testutil.ExecutedOrder) error {
 				return repoErr
 			}},
@@ -132,7 +127,7 @@ func TestOrderService_ExecuteOrder_Errors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc := newTestOrderService(tt.repo, &testutil.StockProvider{GetStockQuoteFn: tt.quote})
+			svc := newTestOrderService(tt.repo, &testutil.MarketProvider{QuoteFn: tt.quote})
 			err := svc.ExecuteOrder(context.Background(), 1, domain.OrderRequest{Symbol: "X", Type: "BUY", Quantity: 1})
 			if err == nil || err.Error() != tt.wantErr {
 				t.Fatalf("ExecuteOrder() error = %v, want %q", err, tt.wantErr)
@@ -144,23 +139,26 @@ func TestOrderService_ExecuteOrder_Errors(t *testing.T) {
 	}
 }
 
-// TestOrderService_ExecuteOrder_ParsesRecordedAvanzaQuote guards against drift between
-// avanzaQuote and the real payload returned by /_api/stock-guide/{id}/quote.
-func TestOrderService_ExecuteOrder_ParsesRecordedAvanzaQuote(t *testing.T) {
-	payload, err := os.ReadFile("testdata/avanza_quote.json")
-	if err != nil {
-		t.Fatalf("read fixture: %v", err)
-	}
+// TestOrderService_ExecuteOrder_FillsAtProviderQuote checks that the order symbol is the instrument id
+// sent to the provider and that a small order fills at exactly Quote.Last (a pinned simulated price).
+func TestOrderService_ExecuteOrder_FillsAtProviderQuote(t *testing.T) {
+	var gotID string
 	repo := &testutil.OrderRepo{}
-	provider := &testutil.StockProvider{GetStockQuoteFn: testutil.QuoteJSON(string(payload))}
+	provider := &testutil.MarketProvider{QuoteFn: func(_ context.Context, id string) (domain.Quote, error) {
+		gotID = id
+		return domain.Quote{OrderbookID: id, Last: 320.3, Bid: 320.2, Ask: 320.4, ChangePercent: 1.2}, nil
+	}}
 
-	err = newTestOrderService(repo, provider).ExecuteOrder(context.Background(), 1, domain.OrderRequest{
+	err := newTestOrderService(repo, provider).ExecuteOrder(context.Background(), 1, domain.OrderRequest{
 		Symbol: "5269", Name: "Volvo B", Type: "BUY", Quantity: 2,
 	})
 	if err != nil {
 		t.Fatalf("ExecuteOrder() error = %v", err)
 	}
-	if got := repo.Executed[0].Price; !almostEqual(got, 320.3) {
-		t.Errorf("price = %v, want 320.3 (the quote's \"last\" field)", got)
+	if gotID != "5269" {
+		t.Errorf("provider id = %q, want the order symbol %q", gotID, "5269")
+	}
+	if got := repo.Executed[0].Price; got != 320.3 {
+		t.Errorf("price = %v, want 320.3 (the quote's Last)", got)
 	}
 }
