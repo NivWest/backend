@@ -1,17 +1,22 @@
 package handlers
 
 import (
-	"backend/internal/version"
-	"github.com/gin-gonic/gin"
 	"net/http"
+
+	"backend/internal/domain"
+	"backend/internal/version"
+
+	"github.com/gin-gonic/gin"
 )
 
-// HealthHandler reports liveness and the running build version.
+// HealthHandler reports liveness, the running build version and the enabled features.
 // Used by local stacks, E2E runs and (later) Cloud Run health checks.
-type HealthHandler struct{}
+type HealthHandler struct {
+	features domain.Features
+}
 
-func NewHealthHandler() *HealthHandler {
-	return &HealthHandler{}
+func NewHealthHandler(features domain.Features) *HealthHandler {
+	return &HealthHandler{features: features}
 }
 
 func (h *HealthHandler) Register(v1 *gin.RouterGroup) {
@@ -19,5 +24,9 @@ func (h *HealthHandler) Register(v1 *gin.RouterGroup) {
 }
 
 func (h *HealthHandler) Health(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "version": version.Version})
+	c.JSON(http.StatusOK, domain.HealthResponse{
+		Status:   "ok",
+		Version:  version.Version,
+		Features: h.features,
+	})
 }
