@@ -74,7 +74,7 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	}
 
 	return &App{
-		HealthHandler:    handlers.NewHealthHandler(),
+		HealthHandler:    handlers.NewHealthHandler(domain.Features{GuestAuth: cfg.Auth.GuestEnabled}),
 		UserHandler:      userHandler,
 		StockHandler:     stockHandler,
 		AuthHandler:      authHandler,
