@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -13,6 +15,7 @@ type Config struct {
 	Database  Database
 	Redis     Redis
 	Avanza    Avanza
+	Market    Market
 	RateLimit RateLimit
 	Auth      Auth
 }
@@ -47,6 +50,17 @@ type Avanza struct {
 	Timeout time.Duration
 }
 
+// Market data providers selectable via MARKET_DATA_PROVIDER.
+const (
+	MarketProviderAvanza    = "avanza"
+	MarketProviderSimulated = "simulated"
+)
+
+type Market struct {
+	Provider          string
+	SimControlEnabled bool
+}
+
 type RateLimit struct {
 	RequestsPerSecond int
 	Burst             int
@@ -72,6 +86,14 @@ func Load(envFile string) (*Config, error) {
 	}
 
 	redisDB := getInt("REDIS_DB", 0)
+
+	marketProvider, err := getMarketProvider(
+		"MARKET_DATA_PROVIDER",
+		MarketProviderAvanza,
+	)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Config{
 		Server: Server{
@@ -122,6 +144,14 @@ func Load(envFile string) (*Config, error) {
 			),
 		},
 
+		Market: Market{
+			Provider: marketProvider,
+			SimControlEnabled: getBool(
+				"MARKET_SIM_CONTROL_ENABLED",
+				false,
+			),
+		},
+
 		RateLimit: RateLimit{
 			RequestsPerSecond: getInt(
 				"RATE_LIMIT_REQUESTS_PER_SECOND",
@@ -155,6 +185,26 @@ func getEnv(key, defaultValue string) string {
 	}
 
 	return defaultValue
+}
+
+func getMarketProvider(key, defaultValue string) (string, error) {
+	value := strings.ToLower(strings.TrimSpace(getEnv(key, "")))
+	if value == "" {
+		return defaultValue, nil
+	}
+
+	switch value {
+	case MarketProviderAvanza, MarketProviderSimulated:
+		return value, nil
+	default:
+		return "", fmt.Errorf(
+			"invalid %s %q: allowed values are %q, %q",
+			key,
+			value,
+			MarketProviderAvanza,
+			MarketProviderSimulated,
+		)
+	}
 }
 
 func getInt(key string, defaultValue int) int {
