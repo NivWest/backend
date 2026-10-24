@@ -28,6 +28,8 @@ type AuthService struct {
 	google     oauth2.Config
 	stateTTL   time.Duration
 	sessionTTL time.Duration
+	guestTTL   time.Duration
+	now        func() time.Time
 }
 
 func NewAuthService(users domain.UserRepository, auth domain.AuthRepository, cfg *config.Config) *AuthService {
@@ -41,6 +43,8 @@ func NewAuthService(users domain.UserRepository, auth domain.AuthRepository, cfg
 			Scopes:       []string{"openid", "email", "profile"},
 		},
 		stateTTL: cfg.Auth.OAuthStateTTL, sessionTTL: cfg.Auth.SessionTTL,
+		guestTTL: cfg.Auth.GuestSessionTTL,
+		now:      time.Now,
 	}
 }
 
@@ -72,13 +76,34 @@ func (s *AuthService) Callback(ctx context.Context, state, code string) (*models
 	if profile.ID == "" || profile.Email == "" || !profile.EmailVerified {
 		return nil, "", fmt.Errorf("Google account email is missing or unverified")
 	}
-	user, err := s.users.UpsertGoogle(ctx, &models.User{GoogleID: profile.ID, Email: profile.Email, Name: profile.Name, Role: "member"})
+	user, err := s.users.UpsertGoogle(ctx, &models.User{GoogleID: profile.ID, Email: profile.Email, Name: profile.Name, Role: domain.RoleMember})
 	if err != nil {
 		return nil, "", fmt.Errorf("upsert user: %w", err)
 	}
 	sessionID := uuid.NewString()
-	if err := s.auth.CreateSession(ctx, &models.Session{ID: sessionID, UserID: user.ID, ExpiresAt: time.Now().Add(s.sessionTTL)}); err != nil {
+	if err := s.auth.CreateSession(ctx, &models.Session{ID: sessionID, UserID: user.ID, ExpiresAt: s.now().Add(s.sessionTTL)}); err != nil {
 		return nil, "", fmt.Errorf("create session: %w", err)
+	}
+	return user, sessionID, nil
+}
+
+// GuestLogin creates a fresh guest account with the demo starting balance and opens a session for it.
+// It returns the new user and the session ID to set as the session cookie.
+func (s *AuthService) GuestLogin(ctx context.Context) (*models.User, string, error) {
+	u := uuid.NewString()
+	user := &models.User{
+		GoogleID: domain.GuestGoogleIDPrefix + u,
+		Email:    "guest-" + u + "@" + domain.GuestEmailDomain,
+		Name:     domain.GuestName,
+		Role:     domain.RoleGuest,
+		Balance:  domain.GuestStartingBalance,
+	}
+	if err := s.users.Create(ctx, user); err != nil {
+		return nil, "", fmt.Errorf("create guest user: %w", err)
+	}
+	sessionID := uuid.NewString()
+	if err := s.auth.CreateSession(ctx, &models.Session{ID: sessionID, UserID: user.ID, ExpiresAt: s.now().Add(s.guestTTL)}); err != nil {
+		return nil, "", fmt.Errorf("create guest session: %w", err)
 	}
 	return user, sessionID, nil
 }
