@@ -27,7 +27,7 @@ components:
         code:
           type: string
           description: Stable UPPER_SNAKE code.
-          examples: [UNAUTHENTICATED, FORBIDDEN, RATE_LIMITED, VALIDATION_ERROR, USER_NOT_FOUND, INSTRUMENT_NOT_FOUND, MARKET_DATA_UNAVAILABLE, INTERNAL_ERROR]
+          examples: [UNAUTHENTICATED, FORBIDDEN, RATE_LIMITED, VALIDATION_ERROR, USER_NOT_FOUND, INSTRUMENT_NOT_FOUND, MARKET_DATA_UNAVAILABLE, INSUFFICIENT_FUNDS, INSUFFICIENT_SHARES, CONFLICT, INTERNAL_ERROR]
 
     Role:
       type: string
@@ -224,6 +224,87 @@ components:
           type: number
           exclusiveMinimum: 0
           description: Pinned last price; stored rounded half-up to 2 decimals.
+
+    OrderSide:
+      type: string
+      enum: [BUY, SELL]
+      description: BUY fills at the ask, SELL fills at the bid.
+
+    OrderType:
+      type: string
+      enum: [MARKET]
+      description: Only market orders until NW-08.
+
+    OrderStatus:
+      type: string
+      enum: [OPEN, FILLED, CANCELLED, REJECTED]
+      description: Market orders are always FILLED; the other states are reserved for pending orders (NW-08).
+
+    OrderRequest:
+      type: object
+      required: [orderbook_id, side, quantity]
+      properties:
+        orderbook_id:
+          type: string
+          minLength: 1
+          examples: [SIM-FJRD]
+        side:
+          $ref: "#/components/schemas/OrderSide"
+        quantity:
+          type: number
+          exclusiveMinimum: 0
+          description: Shares, at most 4 decimals.
+          examples: [10]
+        type:
+          $ref: "#/components/schemas/OrderType"
+          description: Defaults to MARKET.
+
+    Order:
+      type: object
+      description: |
+        An executed order. Pricing (all money in SEK, rounded half-up to 2 decimals):
+        - base price = ask for BUY, bid for SELL;
+        - quantity > 100 applies 0.5% slippage against the trader (BUY × 1.005, SELL × 0.995);
+        - fill_price = base price (after slippage) rounded to 2 decimals, before anything else;
+        - gross = fill_price × quantity; commission = max(1.00, 0.25% × gross);
+        - total = gross + commission (BUY, debited) or gross − commission (SELL, credited).
+        Execution waits a simulated 50–500 ms before the price is read.
+      required: [id, orderbook_id, symbol, name, side, type, status, quantity, fill_price, commission, total, created_at, filled_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        orderbook_id:
+          type: string
+        symbol:
+          type: string
+        name:
+          type: string
+        side:
+          $ref: "#/components/schemas/OrderSide"
+        type:
+          $ref: "#/components/schemas/OrderType"
+        status:
+          $ref: "#/components/schemas/OrderStatus"
+        quantity:
+          type: number
+          description: Up to 4 decimals.
+        fill_price:
+          type: number
+          description: Price per share in SEK, 2 decimals.
+        commission:
+          type: number
+          description: SEK, 2 decimals.
+        total:
+          type: number
+          description: Cash debited (BUY) or credited (SELL) in SEK, 2 decimals.
+        created_at:
+          type: string
+          format: date-time
+        filled_at:
+          type: [string, "null"]
+          format: date-time
+          description: Set when status is FILLED.
 
   responses:
     Unauthenticated:
@@ -528,3 +609,84 @@ paths:
           description: Cleared (or there was no pin).
         "404":
           $ref: "#/components/responses/InstrumentNotFound"
+
+  /orders:
+    post:
+      summary: Place a market order and execute it
+      description: |
+        Validates the request, prices it from the live quote (see the Order schema) and, in one DB transaction,
+        locks the user row, checks cash or shares, moves the cash, updates the position and stores the order.
+        Concurrent orders by the same user are serialized, so cash never goes negative.
+
+        With an `Idempotency-Key` header, a retry with the same key and the same body returns the original order
+        (200, identical body) and executes nothing; the same key with a different body is 409 CONFLICT.
+        Keys are unique per user, also under concurrent retries.
+      operationId: placeOrder
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 255, pattern: "^[\\x21-\\x7E]+$" }
+          description: Client-chosen key (printable ASCII, no spaces), e.g. a UUID per user action.
+          examples:
+            retry: { value: k-123 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrderRequest" }
+            example: { orderbook_id: SIM-FJRD, side: BUY, quantity: 10 }
+      responses:
+        "201":
+          description: Executed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+              example:
+                id: 42
+                orderbook_id: SIM-FJRD
+                symbol: FJRD
+                name: Fjord Robotics
+                side: BUY
+                type: MARKET
+                status: FILLED
+                quantity: 10
+                fill_price: 100.10
+                commission: 2.50
+                total: 1003.50
+                created_at: "2026-10-25T09:41:00Z"
+                filled_at: "2026-10-25T09:41:00Z"
+        "200":
+          description: Replay of an earlier request with the same Idempotency-Key; the body equals the original 201 body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "400":
+          description: |
+            Malformed JSON, blank orderbook_id, side not BUY/SELL, quantity <= 0 or with more than 4 decimals,
+            type other than MARKET, or an invalid Idempotency-Key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: quantity must be greater than 0, code: VALIDATION_ERROR }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/InstrumentNotFound"
+        "409":
+          description: The Idempotency-Key was already used for a different order.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: idempotency key already used for a different order, code: CONFLICT }
+        "422":
+          description: Business rule; nothing was executed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                funds: { value: { error: not enough cash for this order, code: INSUFFICIENT_FUNDS } }
+                shares: { value: { error: not enough shares to sell, code: INSUFFICIENT_SHARES } }
+        "502":
+          $ref: "#/components/responses/MarketDataUnavailable"
