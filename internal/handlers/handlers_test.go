@@ -17,6 +17,7 @@ import (
 	"backend/internal/services"
 	"backend/internal/testutil"
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 )
 
 const (
@@ -87,61 +88,7 @@ func expectErrorBody(t *testing.T, w *httptest.ResponseRecorder) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Orders
-// ---------------------------------------------------------------------------
-
-func TestOrderHandler_PlaceOrder(t *testing.T) {
-	quote := testutil.FixedQuote(domain.Quote{Last: 100})
-
-	t.Run("requires authentication", func(t *testing.T) {
-		svc := services.NewOrderService(&testutil.OrderRepo{}, &testutil.MarketProvider{QuoteFn: quote})
-		w := do(t, newEngine(NewOrderHandler(svc, newAuth())), http.MethodPost, "/api/v1/orders", "", map[string]any{})
-		expectStatus(t, w, http.StatusUnauthorized)
-	})
-
-	invalid := map[string]any{
-		"missing symbol":    map[string]any{"type": "BUY", "quantity": 1},
-		"invalid type":      map[string]any{"symbol": "X", "type": "HOLD", "quantity": 1},
-		"zero quantity":     map[string]any{"symbol": "X", "type": "BUY", "quantity": 0},
-		"negative quantity": map[string]any{"symbol": "X", "type": "SELL", "quantity": -1},
-		"malformed json":    "{",
-	}
-	for name, body := range invalid {
-		t.Run("rejects "+name, func(t *testing.T) {
-			repo := &testutil.OrderRepo{}
-			svc := services.NewOrderService(repo, &testutil.MarketProvider{QuoteFn: quote})
-			w := do(t, newEngine(NewOrderHandler(svc, newAuth())), http.MethodPost, "/api/v1/orders", memberSession, body)
-			expectStatus(t, w, http.StatusBadRequest)
-			expectErrorBody(t, w)
-			if len(repo.Executed) != 0 {
-				t.Error("no transaction may be executed for an invalid request")
-			}
-		})
-	}
-
-	t.Run("executes valid order for current user", func(t *testing.T) {
-		repo := &testutil.OrderRepo{}
-		svc := services.NewOrderService(repo, &testutil.MarketProvider{QuoteFn: quote})
-		w := do(t, newEngine(NewOrderHandler(svc, newAuth())), http.MethodPost, "/api/v1/orders", memberSession,
-			domain.OrderRequest{Symbol: "VOLV-B", Type: "BUY", Quantity: 2})
-		expectStatus(t, w, http.StatusOK)
-		if len(repo.Executed) != 1 || repo.Executed[0].UserID != 1 || repo.Executed[0].Total != 200 {
-			t.Errorf("unexpected executed orders: %+v", repo.Executed)
-		}
-	})
-
-	t.Run("business rule violation returns 400", func(t *testing.T) {
-		repo := &testutil.OrderRepo{ExecuteTransactionFn: func(context.Context, testutil.ExecutedOrder) error {
-			return errors.New("insufficient funds")
-		}}
-		svc := services.NewOrderService(repo, &testutil.MarketProvider{QuoteFn: quote})
-		w := do(t, newEngine(NewOrderHandler(svc, newAuth())), http.MethodPost, "/api/v1/orders", memberSession,
-			domain.OrderRequest{Symbol: "VOLV-B", Type: "BUY", Quantity: 1})
-		expectStatus(t, w, http.StatusBadRequest)
-		expectErrorBody(t, w)
-	})
-}
+// Order handler tests live in order_handler_test.go.
 
 // ---------------------------------------------------------------------------
 // Users
@@ -188,7 +135,7 @@ func TestUserHandler(t *testing.T) {
 	t.Run("GET /user/profile returns public profile without google_id", func(t *testing.T) {
 		auth := testutil.NewAuthRepo().WithSession(memberSession, &models.User{
 			ID: 1, Name: "Member", Email: "member@example.com", Role: domain.RoleMember,
-			Balance: 2500, GoogleID: "google-secret-123",
+			Balance: decimal.NewFromInt(2500), GoogleID: "google-secret-123",
 		})
 		w := do(t, newRouterWithAuth(testutil.NewUserRepo(), auth), http.MethodGet, "/api/v1/user/profile", memberSession, nil)
 		expectStatus(t, w, http.StatusOK)
@@ -357,14 +304,14 @@ func TestPortfolioHandler_Dashboard(t *testing.T) {
 	})
 
 	t.Run("returns dashboard", func(t *testing.T) {
-		users := testutil.NewUserRepo(&models.User{ID: 1, Balance: 1234})
+		users := testutil.NewUserRepo(&models.User{ID: 1, Balance: decimal.RequireFromString("1234.56")})
 		svc := services.NewPortfolioService(&testutil.PortfolioRepo{}, &testutil.MarketProvider{}, users)
 		w := do(t, newEngine(NewPortfolioHandler(svc, newAuth())), http.MethodGet, "/api/v1/portfolio/dashboard", memberSession, nil)
 		expectStatus(t, w, http.StatusOK)
 		var dash services.PortfolioDashboard
 		_ = json.Unmarshal(w.Body.Bytes(), &dash)
-		if dash.Balance != 1234 {
-			t.Errorf("balance = %v, want 1234", dash.Balance)
+		if dash.Balance != 1234.56 {
+			t.Errorf("balance = %v, want 1234.56", dash.Balance)
 		}
 	})
 }

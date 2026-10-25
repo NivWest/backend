@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"backend/internal/domain"
 	"backend/internal/models"
@@ -172,47 +173,111 @@ func (r *AuthRepo) DeleteSession(_ context.Context, sessionID string) error {
 // OrderRepository
 // ---------------------------------------------------------------------------
 
-// ExecutedOrder records the arguments of an OrderRepo.ExecuteTransaction call.
-type ExecutedOrder struct {
-	UserID, StockID        uint
-	Type                   string
-	Quantity, Price, Total float64
-}
-
-// OrderRepo is a fake domain.OrderRepository that records executed orders.
+// OrderRepo is a fake domain.OrderRepository that records every Execute call and keeps the orders it
+// created in memory.
+//
+// Defaults: EnsureStock assigns stock IDs per distinct orderbook id, starting at 1. FindByIdempotencyKey
+// searches the orders Execute created (ErrOrderNotFound otherwise). Execute returns the order already
+// stored under the user's idempotency key with created=false, or else stores and returns a FILLED order
+// with created=true. It never checks cash or shares: set ExecuteFn to simulate those errors.
 type OrderRepo struct {
 	mu       sync.Mutex
-	Executed []ExecutedOrder
+	Executed []domain.ExecuteOrderParams
+	Orders   []*domain.Order
+	stocks   []models.Stock
 
-	EnsureStockFn        func(ctx context.Context, symbol, name string) (*models.Stock, error)
-	GetPositionFn        func(ctx context.Context, userID, stockID uint) (*models.Position, error)
-	ExecuteTransactionFn func(ctx context.Context, o ExecutedOrder) error
+	EnsureStockFn          func(ctx context.Context, orderbookID, symbol, name string) (uint, error)
+	FindByIdempotencyKeyFn func(ctx context.Context, userID uint, key string) (*domain.Order, error)
+	ExecuteFn              func(ctx context.Context, p domain.ExecuteOrderParams) (*domain.Order, bool, error)
+
+	// keys maps each created order (by index in Orders) to its user and idempotency key.
+	keys []orderKey
 }
 
-func (r *OrderRepo) EnsureStock(ctx context.Context, symbol, name string) (*models.Stock, error) {
+type orderKey struct {
+	userID uint
+	key    string
+}
+
+func (r *OrderRepo) EnsureStock(ctx context.Context, orderbookID, symbol, name string) (uint, error) {
 	if r.EnsureStockFn != nil {
-		return r.EnsureStockFn(ctx, symbol, name)
-	}
-	return &models.Stock{ID: 1, Symbol: symbol, Name: name}, nil
-}
-
-func (r *OrderRepo) GetPosition(ctx context.Context, userID, stockID uint) (*models.Position, error) {
-	if r.GetPositionFn != nil {
-		return r.GetPositionFn(ctx, userID, stockID)
-	}
-	return nil, nil
-}
-
-func (r *OrderRepo) ExecuteTransaction(ctx context.Context, userID, stockID uint, orderType string, quantity, price, total float64) error {
-	o := ExecutedOrder{UserID: userID, StockID: stockID, Type: orderType, Quantity: quantity, Price: price, Total: total}
-	if r.ExecuteTransactionFn != nil {
-		if err := r.ExecuteTransactionFn(ctx, o); err != nil {
-			return err
-		}
+		return r.EnsureStockFn(ctx, orderbookID, symbol, name)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.Executed = append(r.Executed, o)
+	for _, s := range r.stocks {
+		if s.OrderbookID == orderbookID {
+			return s.ID, nil
+		}
+	}
+	id := uint(len(r.stocks) + 1)
+	r.stocks = append(r.stocks, models.Stock{ID: id, OrderbookID: orderbookID, Symbol: symbol, Name: name})
+	return id, nil
+}
+
+func (r *OrderRepo) FindByIdempotencyKey(ctx context.Context, userID uint, key string) (*domain.Order, error) {
+	if r.FindByIdempotencyKeyFn != nil {
+		return r.FindByIdempotencyKeyFn(ctx, userID, key)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if o := r.findLocked(userID, key); o != nil {
+		return o, nil
+	}
+	return nil, domain.ErrOrderNotFound
+}
+
+func (r *OrderRepo) Execute(ctx context.Context, p domain.ExecuteOrderParams) (*domain.Order, bool, error) {
+	r.mu.Lock()
+	r.Executed = append(r.Executed, p)
+	r.mu.Unlock()
+	if r.ExecuteFn != nil {
+		return r.ExecuteFn(ctx, p)
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if p.IdempotencyKey != "" {
+		if o := r.findLocked(p.UserID, p.IdempotencyKey); o != nil {
+			return o, false, nil
+		}
+	}
+	var stock models.Stock
+	for _, s := range r.stocks {
+		if s.ID == p.StockID {
+			stock = s
+		}
+	}
+	now := time.Date(2026, 10, 25, 9, 41, 0, 0, time.UTC).Add(time.Duration(len(r.Orders)) * time.Second)
+	o := &domain.Order{
+		ID:          uint(len(r.Orders) + 1),
+		OrderbookID: stock.OrderbookID,
+		Symbol:      stock.Symbol,
+		Name:        stock.Name,
+		Side:        p.Side,
+		Type:        p.Type,
+		Status:      domain.OrderStatusFilled,
+		Quantity:    p.Quantity,
+		FillPrice:   p.FillPrice,
+		Commission:  p.Commission,
+		Total:       p.Total,
+		CreatedAt:   now,
+		FilledAt:    &now,
+	}
+	r.Orders = append(r.Orders, o)
+	r.keys = append(r.keys, orderKey{userID: p.UserID, key: p.IdempotencyKey})
+	cp := *o
+	return &cp, true, nil
+}
+
+// findLocked returns a copy of the user's order stored under key, or nil. r.mu must be held.
+func (r *OrderRepo) findLocked(userID uint, key string) *domain.Order {
+	for i, k := range r.keys {
+		if k.userID == userID && k.key == key && key != "" {
+			cp := *r.Orders[i]
+			return &cp
+		}
+	}
 	return nil
 }
 
