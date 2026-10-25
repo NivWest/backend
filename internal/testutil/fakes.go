@@ -24,7 +24,6 @@ var (
 	_ domain.OrderRepository     = (*OrderRepo)(nil)
 	_ domain.WatchlistRepository = (*WatchlistRepo)(nil)
 	_ domain.PortfolioRepository = (*PortfolioRepo)(nil)
-	_ domain.StockProvider       = (*StockProvider)(nil)
 )
 
 // ---------------------------------------------------------------------------
@@ -285,49 +284,4 @@ type PortfolioRepo struct {
 
 func (r *PortfolioRepo) GetUserPositions(_ context.Context, _ uint) ([]models.Position, error) {
 	return r.Positions, r.Err
-}
-
-// ---------------------------------------------------------------------------
-// StockProvider
-// ---------------------------------------------------------------------------
-
-// StockProvider is a fake domain.StockProvider. Unset functions return ErrNotConfigured.
-type StockProvider struct {
-	SearchFn          func(ctx context.Context, query string) ([]byte, error)
-	GetPriceChartFn   func(ctx context.Context, orderbookID, timePeriod string) ([]byte, error)
-	GetStockDetailsFn func(ctx context.Context, orderbookID string) ([]byte, error)
-	GetStockQuoteFn   func(ctx context.Context, orderbookID string) ([]byte, error)
-}
-
-// QuoteJSON is a convenience for a StockProvider quote returning a fixed JSON payload.
-func QuoteJSON(payload string) func(context.Context, string) ([]byte, error) {
-	return func(context.Context, string) ([]byte, error) { return []byte(payload), nil }
-}
-
-func (p *StockProvider) Search(ctx context.Context, query string) ([]byte, error) {
-	if p.SearchFn != nil {
-		return p.SearchFn(ctx, query)
-	}
-	return nil, ErrNotConfigured
-}
-
-func (p *StockProvider) GetPriceChart(ctx context.Context, orderbookID, timePeriod string) ([]byte, error) {
-	if p.GetPriceChartFn != nil {
-		return p.GetPriceChartFn(ctx, orderbookID, timePeriod)
-	}
-	return nil, ErrNotConfigured
-}
-
-func (p *StockProvider) GetStockDetails(ctx context.Context, orderbookID string) ([]byte, error) {
-	if p.GetStockDetailsFn != nil {
-		return p.GetStockDetailsFn(ctx, orderbookID)
-	}
-	return nil, ErrNotConfigured
-}
-
-func (p *StockProvider) GetStockQuote(ctx context.Context, orderbookID string) ([]byte, error) {
-	if p.GetStockQuoteFn != nil {
-		return p.GetStockQuoteFn(ctx, orderbookID)
-	}
-	return nil, ErrNotConfigured
 }

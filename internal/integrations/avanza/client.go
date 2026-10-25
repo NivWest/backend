@@ -3,49 +3,57 @@ package avanza
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 const (
-	baseURL    = "https://www.avanza.se"
-	searchPath = "/_api/search/filtered-search"
+	defaultBaseURL = "https://www.avanza.se"
+	searchPath     = "/_api/search/filtered-search"
+	defaultTimeout = 10 * time.Second
+
+	// maxResponseBytes caps how much of an upstream body is read.
+	maxResponseBytes = 8 << 20
+	// maxErrorBodyBytes caps how much of an upstream body ends up in an error message.
+	maxErrorBodyBytes = 200
 )
 
-type Client struct {
-	httpClient *http.Client
-}
-
-func NewClient(httpClient *http.Client) *Client {
+// defaultHTTPClient returns httpClient, or a client with defaultTimeout when it is nil.
+func defaultHTTPClient(httpClient *http.Client) *http.Client {
 	if httpClient == nil {
-		httpClient = &http.Client{
-			Timeout: 10 * time.Second,
-		}
+		return &http.Client{Timeout: defaultTimeout}
 	}
-
-	return &Client{
-		httpClient: httpClient,
-	}
+	return httpClient
 }
 
-func (c *Client) do(
+// statusError is a non-2xx upstream answer. Body holds at most maxErrorBodyBytes of the response.
+type statusError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *statusError) Error() string {
+	return fmt.Sprintf("avanza returned HTTP %d: %s", e.StatusCode, e.Body)
+}
+
+// do sends one request to baseURL+path with browser-like headers and returns the response body.
+// Non-2xx answers return a *statusError.
+func do(
 	ctx context.Context,
+	httpClient *http.Client,
+	baseURL string,
 	method string,
 	path string,
 	body []byte,
 ) ([]byte, error) {
-	req, err := http.NewRequestWithContext(
-		ctx,
-		method,
-		baseURL+path,
-		bytes.NewReader(body),
-	)
+	var reqBody io.Reader
+	if body != nil {
+		reqBody = bytes.NewReader(body)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -63,111 +71,25 @@ func (c *Client) do(
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request Avanza: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
 
-		return nil, fmt.Errorf(
-			"avanza returned HTTP %d: %s",
-			resp.StatusCode,
-			string(responseBody),
-		)
+		return nil, &statusError{
+			StatusCode: resp.StatusCode,
+			Body:       string(bytes.ToValidUTF8(snippet, nil)),
+		}
 	}
 
-	result, err := io.ReadAll(resp.Body)
+	result, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
 		return nil, fmt.Errorf("read Avanza response: %w", err)
 	}
 
 	return result, nil
-}
-
-func (c *Client) Search(
-	ctx context.Context,
-	query string,
-) ([]byte, error) {
-	payload := SearchRequest{
-		Query: query,
-		SearchFilter: SearchFilter{
-			Types: []string{},
-		},
-		ScreenSize:      "DESKTOP",
-		OriginPath:      "/start",
-		OriginPlatform:  "PWA",
-		SearchSessionID: uuid.NewString(),
-		Pagination: Pagination{
-			From: 0,
-			Size: 30,
-		},
-	}
-
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("marshal search payload: %w", err)
-	}
-
-	return c.do(
-		ctx,
-		http.MethodPost,
-		searchPath,
-		body,
-	)
-}
-
-func (c *Client) GetPriceChart(
-	ctx context.Context,
-	orderbookID string,
-	timePeriod string,
-) ([]byte, error) {
-	path := fmt.Sprintf(
-		"/_api/price-chart/stock/%s/compare/1002994?timePeriod=%s",
-		url.PathEscape(orderbookID),
-		url.QueryEscape(timePeriod),
-	)
-
-	return c.do(
-		ctx,
-		http.MethodGet,
-		path,
-		nil,
-	)
-}
-
-func (c *Client) GetStockDetails(
-	ctx context.Context,
-	orderbookID string,
-) ([]byte, error) {
-	path := fmt.Sprintf(
-		"/_api/stock-guide/%s/details",
-		url.PathEscape(orderbookID),
-	)
-
-	return c.do(
-		ctx,
-		http.MethodGet,
-		path,
-		nil,
-	)
-}
-
-func (c *Client) GetStockQuote(
-	ctx context.Context,
-	orderbookID string,
-) ([]byte, error) {
-	path := fmt.Sprintf(
-		"/_api/stock-guide/%s/quote",
-		url.PathEscape(orderbookID),
-	)
-
-	return c.do(
-		ctx,
-		http.MethodGet,
-		path,
-		nil,
-	)
 }

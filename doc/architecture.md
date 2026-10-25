@@ -2,14 +2,14 @@
 
 ## 1. Project Overview & Tech Stack
 
-NivWest Backend is a Go API service powering the NivWest stock trading simulator. It proxies market data from Avanza, manages simulator accounts, tracks virtual portfolios with market frictions (simulated execution latency and volume slippage), handles watchlists, and authenticates users via Google OAuth 2.0 (PKCE) and opaque PostgreSQL-backed sessions.
+NivWest Backend is a Go API service powering the NivWest stock trading simulator. It serves market data through a provider port (Avanza or a deterministic simulated market), manages simulator accounts, tracks virtual portfolios with market frictions (simulated execution latency and volume slippage), handles watchlists, and authenticates users via Google OAuth 2.0 (PKCE) and opaque PostgreSQL-backed sessions.
 
 - **Language / Runtime:** Go 1.25 (`module backend`)
 - **HTTP Web Framework:** Gin (`github.com/gin-gonic/gin`)
 - **ORM / Database:** GORM (`gorm.io/gorm`) with PostgreSQL 16 driver
 - **Authentication:** Google OAuth 2.0 with PKCE, secure HTTP-only cookie sessions
 - **Rate Limiting:** `golang.org/x/time/rate` (in-memory per-IP token bucket)
-- **External Integration:** Avanza public web API (`https://www.avanza.se`)
+- **External Integration:** Avanza public web API (`https://www.avanza.se`), or the in-process simulated market (`MARKET_DATA_PROVIDER`)
 - **Containerization:** Multi-stage Dockerfile, Docker Compose
 
 ---
@@ -39,7 +39,7 @@ HTTP Request
      ├──────────────────────────┐
      ▼                          ▼
 [internal/repository/]     [internal/integrations/]
-(GORM / Postgres)          (Avanza HTTP client, DB pooling)
+(GORM / Postgres)          (market data adapters, DB pooling)
      │
      ▼
 [internal/models/]         Database schema models & tags
@@ -55,6 +55,7 @@ HTTP Request
 | `internal/domain/` | Core interfaces, DTOs, domain errors. | `internal/models`, stdlib | GORM queries, Gin context. |
 | `internal/models/` | GORM entity definitions, table schemas. | `gorm`, stdlib | Business logic, handlers, services. |
 | `internal/integrations/` | Low-level external clients. | `internal/config`, `internal/models`, `gorm`, stdlib | Gin handlers, domain services. |
+| `internal/integrations/avanza/`, `internal/integrations/simmarket/` | Market data adapters implementing `domain.MarketDataProvider` (see 3.8). | `internal/domain` (to implement the port and return its DTOs/errors), stdlib | Gin, GORM, services. |
 | `internal/repository/` | Concrete implementations using GORM. | `internal/domain`, `internal/models`, `gorm` | Gin context, HTTP status codes. |
 | `internal/services/` | Business rules, orchestration. | `internal/domain`, `internal/models`, `internal/config`, stdlib | Gin context, GORM access. |
 | `internal/handlers/` | HTTP request binding, status codes, JSON responses. | `internal/domain`, `internal/services`, `internal/middleware`, `internal/models`, `gin` | GORM queries, direct DB access. |
@@ -91,7 +92,7 @@ type Registrar interface {
 - Use row-level locking (`clause.Locking{Strength: "UPDATE"}`) when reading records that will be updated in the same transaction.
 - Always verify balance or quantity sufficiency before deducting. Return clear errors to trigger automatic rollback.
 
-### 3.5. Concurrent Stock Quote Fetching
+### 3.5. Concurrent Quote Fetching
 - Run parallel fetches in goroutines using `sync.WaitGroup`.
 - Guard slice appends and shared data mutations with `sync.Mutex`.
 - Include fallback logic (e.g., if live quote fails, fall back to `AvgPrice`).
@@ -108,6 +109,15 @@ type Registrar interface {
 - Mark sensitive fields with `json:"-"`.
 - **Auto-migration:** Every new model **MUST** be added to `internal/integrations/database/migrate.go`.
 
+### 3.8. Market Data Port
+- `domain.MarketDataProvider` (`internal/domain/market.go`) is the port for market data: `Search`, `Quote`, `Details`, `Candles`. It speaks only domain DTOs (`InstrumentSummary`, `Quote`, `InstrumentDetails`, `Candle`) and errors (`ErrInstrumentNotFound` → 404, `ErrMarketDataUnavailable` → 502, `*ValidationError` → 400). No upstream JSON leaves an adapter.
+- Adapters live in `internal/integrations/` and may import `internal/domain` to implement the port:
+  - `internal/integrations/avanza` (`avanza.NewMarketProvider`): the Avanza public web API (`AVANZA_BASE_URL`, `AVANZA_TIMEOUT`).
+  - `internal/integrations/simmarket` (`simmarket.New`): twelve fictional `SIM-*` instruments on a seeded, deterministic price path. No network. It also implements `domain.MarketSimControl` (pin/clear a price).
+- `internal/app` picks the adapter from `MARKET_DATA_PROVIDER` (`avanza` by default, or `simulated`) and builds **one** instance, shared by `services.MarketService` and the handlers. The simulated market caches its daily aggregates per instance and is warmed in a background goroutine at startup. The active provider is logged at startup and reported as `market_data_provider` by `GET /health`.
+- `handlers.MarketHandler` serves the public `/market/instruments…` routes (no session, rate-limited).
+- **Dev/test only:** `handlers.SimHandler` (`PUT`/`DELETE /sim/instruments/{orderbook_id}/price`) is mounted only when `MARKET_DATA_PROVIDER=simulated` **and** `MARKET_SIM_CONTROL_ENABLED=true`; `GET /health` then reports `features.sim_control: true`. It has no auth and no rate limit, and must never be enabled in production. With the Avanza provider the flag is ignored (with a startup warning).
+
 ---
 
 ## 4. Security & API Hygiene
@@ -115,5 +125,6 @@ type Registrar interface {
 - **Session Security:** Cookies must be `HttpOnly`. Secure flag enabled via `AUTH_COOKIE_SECURE=true`.
 - **Sensitive Data:** Never return internal session tokens or password hashes in API JSON responses.
 - **ID Parsing:** Always validate URL path identifiers using `strconv.ParseUint`.
-- **Avanza Upstream Scraping:** Rate limiting must always remain active on `/stocks` routes to prevent IP bans.
+- **Avanza Upstream Scraping:** Rate limiting must always remain active on `/market` routes to prevent IP bans.
+- **Sim Control:** The `/sim` routes are unauthenticated test hooks; never set `MARKET_SIM_CONTROL_ENABLED=true` in production.
 

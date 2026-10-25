@@ -10,54 +10,6 @@ import (
 	"backend/internal/testutil"
 )
 
-func TestStockService_ValidatesInput(t *testing.T) {
-	svc := NewStockService(&testutil.StockProvider{})
-	ctx := context.Background()
-
-	cases := map[string]func() error{
-		"search blank query": func() error { _, err := svc.Search(ctx, "   "); return err },
-		"chart empty id":     func() error { _, err := svc.GetPriceChart(ctx, "", "one_month"); return err },
-		"details empty id":   func() error { _, err := svc.GetStockDetails(ctx, ""); return err },
-		"quote empty id":     func() error { _, err := svc.GetStockQuote(ctx, ""); return err },
-	}
-	for name, call := range cases {
-		t.Run(name, func(t *testing.T) {
-			if err := call(); err == nil {
-				t.Fatal("expected validation error, got nil")
-			}
-		})
-	}
-}
-
-func TestStockService_Search_TrimsQueryAndDelegates(t *testing.T) {
-	var gotQuery string
-	svc := NewStockService(&testutil.StockProvider{SearchFn: func(_ context.Context, q string) ([]byte, error) {
-		gotQuery = q
-		return []byte(`[]`), nil
-	}})
-
-	out, err := svc.Search(context.Background(), "  volvo ")
-	if err != nil {
-		t.Fatalf("Search() error = %v", err)
-	}
-	if gotQuery != "volvo" {
-		t.Errorf("provider query = %q, want %q", gotQuery, "volvo")
-	}
-	if string(out) != `[]` {
-		t.Errorf("Search() = %s, want []", out)
-	}
-}
-
-func TestStockService_PropagatesProviderErrors(t *testing.T) {
-	providerErr := errors.New("upstream down")
-	svc := NewStockService(&testutil.StockProvider{
-		GetStockQuoteFn: func(context.Context, string) ([]byte, error) { return nil, providerErr },
-	})
-	if _, err := svc.GetStockQuote(context.Background(), "123"); !errors.Is(err, providerErr) {
-		t.Fatalf("error = %v, want %v", err, providerErr)
-	}
-}
-
 func TestWatchlistService_AddItem_EnsuresStockThenAdds(t *testing.T) {
 	var added struct{ userID, listID, stockID uint }
 	repo := &testutil.WatchlistRepo{

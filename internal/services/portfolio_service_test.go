@@ -32,12 +32,16 @@ func TestPortfolioService_GetDashboard_TotalsAndWeights(t *testing.T) {
 		position("AAA", 10, 100), // live 150 -> value 1500, unrealized +500
 		position("BBB", 5, 100),  // live 100 -> value 500, unrealized 0
 	}}
-	quotes := map[string]string{
-		"AAA": `{"last":150,"changePercent":2.5}`,
-		"BBB": `{"last":100,"changePercent":-1}`,
+	quotes := map[string]domain.Quote{
+		"AAA": {Last: 150, ChangePercent: 2.5},
+		"BBB": {Last: 100, ChangePercent: -1},
 	}
-	provider := &testutil.StockProvider{GetStockQuoteFn: func(_ context.Context, id string) ([]byte, error) {
-		return []byte(quotes[id]), nil
+	provider := &testutil.MarketProvider{QuoteFn: func(_ context.Context, id string) (domain.Quote, error) {
+		q, ok := quotes[id]
+		if !ok {
+			return domain.Quote{}, domain.ErrInstrumentNotFound
+		}
+		return q, nil
 	}}
 
 	dash, err := NewPortfolioService(repo, provider, users).GetDashboard(context.Background(), 1)
@@ -69,17 +73,17 @@ func TestPortfolioService_GetDashboard_FallsBackToAvgPriceWhenQuoteFails(t *test
 	users := testutil.NewUserRepo(&models.User{ID: 1})
 	repo := &testutil.PortfolioRepo{Positions: []models.Position{
 		position("ERR", 2, 40),  // provider error
-		position("BAD", 3, 10),  // malformed JSON
+		position("GONE", 3, 10), // unknown instrument
 		position("ZERO", 1, 99), // zero price
 	}}
-	provider := &testutil.StockProvider{GetStockQuoteFn: func(_ context.Context, id string) ([]byte, error) {
+	provider := &testutil.MarketProvider{QuoteFn: func(_ context.Context, id string) (domain.Quote, error) {
 		switch id {
 		case "ERR":
-			return nil, errors.New("upstream down")
-		case "BAD":
-			return []byte("{"), nil
+			return domain.Quote{}, fmt.Errorf("%w: upstream down", domain.ErrMarketDataUnavailable)
+		case "GONE":
+			return domain.Quote{}, domain.ErrInstrumentNotFound
 		default:
-			return []byte(`{"last":0}`), nil
+			return domain.Quote{Last: 0}, nil
 		}
 	}}
 
@@ -103,10 +107,10 @@ func TestPortfolioService_GetDashboard_TopMoversSortedAndCapped(t *testing.T) {
 	for i := 1; i <= 7; i++ {
 		positions = append(positions, position(fmt.Sprintf("S%d", i), 1, 10))
 	}
-	provider := &testutil.StockProvider{GetStockQuoteFn: func(_ context.Context, id string) ([]byte, error) {
+	provider := &testutil.MarketProvider{QuoteFn: func(_ context.Context, id string) (domain.Quote, error) {
 		var n int
 		fmt.Sscanf(id, "S%d", &n)
-		return []byte(fmt.Sprintf(`{"last":10,"changePercent":%d}`, n)), nil
+		return domain.Quote{Last: 10, ChangePercent: float64(n)}, nil
 	}}
 
 	dash, err := NewPortfolioService(&testutil.PortfolioRepo{Positions: positions}, provider, users).
@@ -129,7 +133,7 @@ func TestPortfolioService_GetDashboard_TopMoversSortedAndCapped(t *testing.T) {
 
 func TestPortfolioService_GetDashboard_EmptyPortfolio(t *testing.T) {
 	users := testutil.NewUserRepo(&models.User{ID: 1, Balance: 100000})
-	dash, err := NewPortfolioService(&testutil.PortfolioRepo{}, &testutil.StockProvider{}, users).
+	dash, err := NewPortfolioService(&testutil.PortfolioRepo{}, &testutil.MarketProvider{}, users).
 		GetDashboard(context.Background(), 1)
 	if err != nil {
 		t.Fatalf("GetDashboard() error = %v", err)
@@ -141,14 +145,14 @@ func TestPortfolioService_GetDashboard_EmptyPortfolio(t *testing.T) {
 
 func TestPortfolioService_GetDashboard_PropagatesErrors(t *testing.T) {
 	t.Run("user not found", func(t *testing.T) {
-		svc := NewPortfolioService(&testutil.PortfolioRepo{}, &testutil.StockProvider{}, testutil.NewUserRepo())
+		svc := NewPortfolioService(&testutil.PortfolioRepo{}, &testutil.MarketProvider{}, testutil.NewUserRepo())
 		if _, err := svc.GetDashboard(context.Background(), 42); !errors.Is(err, domain.ErrUserNotFound) {
 			t.Fatalf("error = %v, want ErrUserNotFound", err)
 		}
 	})
 	t.Run("positions query fails", func(t *testing.T) {
 		repoErr := errors.New("db down")
-		svc := NewPortfolioService(&testutil.PortfolioRepo{Err: repoErr}, &testutil.StockProvider{},
+		svc := NewPortfolioService(&testutil.PortfolioRepo{Err: repoErr}, &testutil.MarketProvider{},
 			testutil.NewUserRepo(&models.User{ID: 1}))
 		if _, err := svc.GetDashboard(context.Background(), 1); !errors.Is(err, repoErr) {
 			t.Fatalf("error = %v, want %v", err, repoErr)

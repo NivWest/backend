@@ -1,0 +1,17 @@
+{
+  "buy": 411.5,
+  "sell": 411.65,
+  "last": 412.0,
+  "highest": 412.0,
+  "lowest": 407.55,
+  "closing": 409.05,
+  "change": 2.95,
+  "changePercent": 0.72,
+  "spread": 0.04,
+  "timeOfLast": 1792769392000,
+  "totalValueTraded": 1083912728.7,
+  "totalVolumeTraded": 2640164.0,
+  "updated": 1792771200617,
+  "volumeWeightedAveragePrice": 410.55,
+  "isRealTime": false
+}

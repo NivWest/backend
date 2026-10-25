@@ -1,0 +1,65 @@
+{
+  "ohlc": [
+    {
+      "timestamp": 1790319600000,
+      "open": 412.9,
+      "close": 413.5,
+      "low": 412.85,
+      "high": 415.7,
+      "totalVolumeTraded": 354737
+    },
+    {
+      "timestamp": 1790323200000,
+      "open": 413.5,
+      "close": 414.3,
+      "low": 412.75,
+      "high": 414.65,
+      "totalVolumeTraded": 129825
+    },
+    {
+      "timestamp": 1790326800000,
+      "open": 414.25,
+      "close": 412.25,
+      "low": 412.0,
+      "high": 414.5,
+      "totalVolumeTraded": 117653
+    },
+    {
+      "timestamp": 1790330400000,
+      "open": 412.3,
+      "close": 412.35,
+      "low": 411.75,
+      "high": 412.65,
+      "totalVolumeTraded": 64702
+    },
+    {
+      "timestamp": 1790334000000,
+      "open": 412.35,
+      "close": 412.65,
+      "low": 412.2,
+      "high": 413.3,
+      "totalVolumeTraded": 85854
+    },
+    {
+      "timestamp": 1790337600000,
+      "open": 412.65,
+      "close": 412.7,
+      "low": 412.35,
+      "high": 413.15,
+      "totalVolumeTraded": 95065
+    }
+  ],
+  "metadata": {
+    "resolution": {
+      "chartResolution": "hour",
+      "availableResolutions": [
+        "hour",
+        "day",
+        "week"
+      ]
+    }
+  },
+  "from": "2026-09-25",
+  "to": "2026-10-25",
+  "previousClosingPrice": 408.85
+}
