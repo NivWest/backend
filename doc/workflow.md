@@ -48,8 +48,8 @@ The full rules live in the workspace repo: [`NivWest/platform` → `docs/git-wor
 ### 3.1. Branches
 | Branch | From | Into | Merge method |
 |---|---|---|---|
-| `feature/<id>-<slug>` | `dev` | `dev` | squash |
-| `bugfix/<id>-<slug>` | `dev` | `dev` | squash |
+| `feature/<id>-<slug>` | `dev` | `dev` | merge commit |
+| `bugfix/<id>-<slug>` | `dev` | `dev` | merge commit |
 | `release/X.Y.Z` | `dev` | `main` (+ back-merge into `dev`) | merge commit |
 | `hotfix/X.Y.Z` | `main` | `main` (+ back-merge into `dev`) | merge commit |
 
@@ -60,7 +60,7 @@ The full rules live in the workspace repo: [`NivWest/platform` → `docs/git-wor
 
 Allowed scopes: `auth`, `order`, `portfolio`, `stock`, `user`, `watchlist`, `config`, `db`, `api`.
 
-Feature PRs are squash-merged, so the **PR title becomes the commit on `dev`** and must be a Conventional Commit (CI checks it).
+Feature PRs are merged with a **merge commit** (never squashed), so every commit on the branch lands on `dev`: each commit message and the PR title must be Conventional Commits (CI checks the title). git-cliff skips the `Merge …` / `merge(…)` commits themselves.
 
 ### 3.3. Pull Requests
 - Opened and merged by humans. AI agents (the `/story` workflow in the platform workspace) only push `feature/*` branches.

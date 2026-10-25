@@ -1,7 +1,7 @@
 name: PR Policy
 
 # GitFlow guard rails (see NivWest/platform docs/git-workflow.md):
-# - PR titles are Conventional Commits (feature PRs are squash-merged, so the title becomes the commit).
+# - PR titles are Conventional Commits (feature PRs are merged with a merge commit; the branch's commits must be Conventional too).
 # - Only release/* and hotfix/* go into main; dev takes feature/bugfix/release/hotfix and back-merges from main.
 # - A release/hotfix PR must carry the matching version in VERSION or package.json.
 
