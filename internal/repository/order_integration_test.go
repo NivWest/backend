@@ -13,9 +13,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -134,6 +136,25 @@ func sell(userID, stockID uint, qty, price, commission, total string) domain.Exe
 	return domain.ExecuteOrderParams{
 		UserID: userID, StockID: stockID, Side: domain.OrderSideSell, Type: domain.OrderTypeMarket,
 		Quantity: dec(qty), FillPrice: dec(price), Commission: dec(commission), Total: dec(total),
+	}
+}
+
+// assertSameOrder fails unless got deep-equals want and both marshal to byte-identical JSON.
+func assertSameOrder(t *testing.T, label string, want, got *domain.Order) {
+	t.Helper()
+	if !reflect.DeepEqual(want, got) {
+		t.Fatalf("%s: order differs\n got  %+v\n want %+v", label, got, want)
+	}
+	wantJSON, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotJSON, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(wantJSON) != string(gotJSON) {
+		t.Fatalf("%s: JSON differs\n got  %s\n want %s", label, gotJSON, wantJSON)
 	}
 }
 
@@ -269,6 +290,14 @@ func TestOrderRepo_IdempotencyKey(t *testing.T) {
 		if err != nil || found.ID != first.ID {
 			t.Fatalf("find: %+v, %v", found, err)
 		}
+		// The created order, the replay and a later read are the same order, timestamps included
+		// (Postgres keeps microseconds; a nanosecond CreatedAt on the created path broke AC4).
+		if first.FilledAt == nil || first.CreatedAt.Nanosecond()%1000 != 0 {
+			t.Fatalf("created order timestamps not at microsecond precision: %+v", first)
+		}
+		assertSameOrder(t, "replay", first, second)
+		assertSameOrder(t, "find", first, found)
+
 		if n := countOrders(t, db, user.ID); n != 1 {
 			t.Fatalf("orders = %d, want 1", n)
 		}
