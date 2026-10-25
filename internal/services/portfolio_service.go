@@ -5,6 +5,8 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/shopspring/decimal"
+
 	"backend/internal/domain"
 )
 
@@ -26,6 +28,8 @@ func NewPortfolioService(
 	}
 }
 
+// DashboardPosition is one holding on the dashboard. Money fields (AvgPrice, CurrentPrice, Value) are SEK
+// rounded half-up to 2 decimals; Weight is the percentage of the portfolio's total value.
 type DashboardPosition struct {
 	StockName     string  `json:"stock_name"`
 	Symbol        string  `json:"symbol"`
@@ -37,12 +41,21 @@ type DashboardPosition struct {
 	Weight        float64 `json:"weight"`
 }
 
+// PortfolioDashboard is the body of GET /portfolio/dashboard. Money fields are SEK rounded half-up to 2 decimals.
 type PortfolioDashboard struct {
 	Balance         float64             `json:"balance"`
 	TotalValue      float64             `json:"total_value"`
 	TotalUnrealized float64             `json:"total_unrealized"`
 	Positions       []DashboardPosition `json:"positions"`
 	TopMovers       []DashboardPosition `json:"top_movers"`
+}
+
+// valuedPosition is a position with its live price, kept in decimal until the dashboard is serialized.
+type valuedPosition struct {
+	name, symbol        string
+	quantity, avgPrice  decimal.Decimal
+	currentPrice, value decimal.Decimal
+	changePercent       float64
 }
 
 func (s *PortfolioService) GetDashboard(ctx context.Context, userID uint) (*PortfolioDashboard, error) {
@@ -56,80 +69,64 @@ func (s *PortfolioService) GetDashboard(ctx context.Context, userID uint) (*Port
 		return nil, err
 	}
 
-	dashboard := &PortfolioDashboard{
-		Balance:   user.Balance,
-		Positions: make([]DashboardPosition, 0, len(positions)),
-	}
-
+	valued := make([]valuedPosition, len(positions))
 	var wg sync.WaitGroup
-	var mu sync.Mutex
-
-	for _, pos := range positions {
+	for i, pos := range positions {
+		valued[i] = valuedPosition{
+			name:         pos.Stock.Name,
+			symbol:       pos.Stock.Symbol,
+			quantity:     pos.Quantity,
+			avgPrice:     pos.AvgPrice,
+			currentPrice: pos.AvgPrice, // fallback when the quote fails or has no price
+		}
 		wg.Add(1)
-		go func(position struct {
-			StockName string
-			Symbol    string
-			Quantity  float64
-			AvgPrice  float64
-		}) {
+		go func(vp *valuedPosition, orderbookID string) {
 			defer wg.Done()
-
-			dp := DashboardPosition{
-				StockName: position.StockName,
-				Symbol:    position.Symbol,
-				Quantity:  position.Quantity,
-				AvgPrice:  position.AvgPrice,
+			// Positions are quoted by their stock's market data orderbook id (symbols are not unique).
+			// Each goroutine writes only its own slice element, so no lock is needed.
+			if quote, err := s.provider.Quote(ctx, orderbookID); err == nil && quote.Last > 0 {
+				vp.currentPrice = decimal.NewFromFloat(quote.Last)
+				vp.changePercent = quote.ChangePercent
 			}
-
-			// Fetch real-time quote. Positions still carry only a symbol, which is passed as the
-			// instrument id as before; identifying instruments by orderbook_id is NW-04's job.
-			if quote, err := s.provider.Quote(ctx, position.Symbol); err == nil {
-				dp.CurrentPrice = quote.Last
-				dp.ChangePercent = quote.ChangePercent
-			}
-
-			// Fallback if quote fails
-			if dp.CurrentPrice == 0 {
-				dp.CurrentPrice = dp.AvgPrice
-			}
-
-			dp.Value = dp.CurrentPrice * dp.Quantity
-
-			mu.Lock()
-			dashboard.Positions = append(dashboard.Positions, dp)
-			mu.Unlock()
-
-		}(struct {
-			StockName string
-			Symbol    string
-			Quantity  float64
-			AvgPrice  float64
-		}{
-			StockName: pos.Stock.Name,
-			Symbol:    pos.Stock.Symbol,
-			Quantity:  pos.Quantity,
-			AvgPrice:  pos.AvgPrice,
-		})
+		}(&valued[i], pos.Stock.OrderbookID)
 	}
-
 	wg.Wait()
 
-	// Calculate totals and weights
-	for _, p := range dashboard.Positions {
-		dashboard.TotalValue += p.Value
-		dashboard.TotalUnrealized += (p.CurrentPrice - p.AvgPrice) * p.Quantity
+	totalValue := decimal.Zero
+	totalUnrealized := decimal.Zero
+	for i := range valued {
+		vp := &valued[i]
+		vp.value = vp.currentPrice.Mul(vp.quantity)
+		totalValue = totalValue.Add(vp.value)
+		totalUnrealized = totalUnrealized.Add(vp.currentPrice.Sub(vp.avgPrice).Mul(vp.quantity))
 	}
 
-	if dashboard.TotalValue > 0 {
-		for i := range dashboard.Positions {
-			dashboard.Positions[i].Weight = (dashboard.Positions[i].Value / dashboard.TotalValue) * 100
+	dashboard := &PortfolioDashboard{
+		Balance:         domain.MoneyFloat(user.Balance),
+		TotalValue:      domain.MoneyFloat(totalValue),
+		TotalUnrealized: domain.MoneyFloat(totalUnrealized),
+		Positions:       make([]DashboardPosition, 0, len(valued)),
+	}
+	for _, vp := range valued {
+		dp := DashboardPosition{
+			StockName:     vp.name,
+			Symbol:        vp.symbol,
+			Quantity:      vp.quantity.InexactFloat64(),
+			AvgPrice:      domain.MoneyFloat(vp.avgPrice),
+			CurrentPrice:  domain.MoneyFloat(vp.currentPrice),
+			ChangePercent: vp.changePercent,
+			Value:         domain.MoneyFloat(vp.value),
 		}
+		if totalValue.IsPositive() {
+			dp.Weight = vp.value.Div(totalValue).Mul(decimal.NewFromInt(100)).InexactFloat64()
+		}
+		dashboard.Positions = append(dashboard.Positions, dp)
 	}
 
 	// Sort by day change for Top Movers
 	dashboard.TopMovers = make([]DashboardPosition, len(dashboard.Positions))
 	copy(dashboard.TopMovers, dashboard.Positions)
-	sort.Slice(dashboard.TopMovers, func(i, j int) bool {
+	sort.SliceStable(dashboard.TopMovers, func(i, j int) bool {
 		return dashboard.TopMovers[i].ChangePercent > dashboard.TopMovers[j].ChangePercent
 	})
 

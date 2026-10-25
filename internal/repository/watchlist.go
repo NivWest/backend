@@ -46,20 +46,20 @@ func (r *watchlistRepo) Delete(ctx context.Context, userID uint, watchlistID uin
 	return nil
 }
 
+// EnsureStock returns the first stock with this symbol. Watchlists stay keyed by symbol until their
+// own story moves them to orderbook ids; a missing stock is created with OrderbookID = symbol, using
+// the same race-safe insert-or-reselect as orderRepo.EnsureStock.
 func (r *watchlistRepo) EnsureStock(ctx context.Context, symbol, name string) (*models.Stock, error) {
+	db := r.db.WithContext(ctx)
 	var stock models.Stock
-	err := r.db.WithContext(ctx).Where("symbol = ?", symbol).First(&stock).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		stock = models.Stock{
-			Symbol: symbol,
-			Name:   name,
-		}
-		if err := r.db.WithContext(ctx).Create(&stock).Error; err != nil {
-			return nil, err
-		}
+	err := db.Where("symbol = ?", symbol).Order("id").Limit(1).Find(&stock).Error
+	if err != nil {
+		return nil, err
+	}
+	if stock.ID != 0 {
 		return &stock, nil
 	}
-	return &stock, err
+	return ensureStockRow(db, symbol, symbol, name)
 }
 
 func (r *watchlistRepo) AddItem(ctx context.Context, userID uint, watchlistID uint, stockID uint) error {

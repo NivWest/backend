@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"backend/internal/models"
+	"github.com/shopspring/decimal"
 )
 
 // User roles stored in models.User.Role.
@@ -22,16 +23,18 @@ const (
 //	GoogleID = GuestGoogleIDPrefix + <uuid>             // column is unique and not null
 //	Email    = "guest-" + <uuid> + "@" + GuestEmailDomain
 const (
-	GuestName            = "Guest trader"
-	GuestStartingBalance = 100000.0
-	GuestGoogleIDPrefix  = "guest:"
-	GuestEmailDomain     = "guest.tradeedu.invalid"
+	GuestName           = "Guest trader"
+	GuestGoogleIDPrefix = "guest:"
+	GuestEmailDomain    = "guest.tradeedu.invalid"
 
 	// GuestRetention is how long after its newest session expired a guest is kept before it is purged.
 	GuestRetention = 24 * time.Hour
 	// GuestPurgeInterval is how often the purge ticker started in internal/app runs.
 	GuestPurgeInterval = time.Hour
 )
+
+// GuestStartingBalance is a guest's starting cash in SEK.
+var GuestStartingBalance = decimal.NewFromInt(100000)
 
 // API error codes, returned as ErrorResponse.Code.
 const (
@@ -56,7 +59,7 @@ type ProfileResponse struct {
 	Name    string  `json:"name"`
 	Email   string  `json:"email"`
 	Role    string  `json:"role"`
-	Balance float64 `json:"balance"`
+	Balance float64 `json:"balance"` // SEK, rounded half-up to 2 decimals
 	IsGuest bool    `json:"is_guest"`
 }
 
@@ -67,7 +70,7 @@ func NewProfileResponse(u *models.User) ProfileResponse {
 		Name:    u.Name,
 		Email:   u.Email,
 		Role:    u.Role,
-		Balance: u.Balance,
+		Balance: MoneyFloat(u.Balance),
 		IsGuest: u.Role == RoleGuest,
 	}
 }

@@ -58,7 +58,7 @@ func TestAuthService_GuestLogin_CreatesGuestUserAndSession(t *testing.T) {
 	if user.Name != "Guest trader" {
 		t.Errorf("Name = %q, want %q", user.Name, "Guest trader")
 	}
-	if user.Balance != 100000 {
+	if !user.Balance.Equal(dec("100000")) {
 		t.Errorf("Balance = %v, want 100000", user.Balance)
 	}
 	if !strings.HasPrefix(user.GoogleID, domain.GuestGoogleIDPrefix) || len(user.GoogleID) <= len(domain.GuestGoogleIDPrefix) {

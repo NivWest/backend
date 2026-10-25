@@ -91,6 +91,15 @@ type Registrar interface {
   ```
 - Use row-level locking (`clause.Locking{Strength: "UPDATE"}`) when reading records that will be updated in the same transaction.
 - Always verify balance or quantity sufficiency before deducting. Return clear errors to trigger automatic rollback.
+- **Order execution** (`orderRepo.Execute`, `internal/repository/order.go`, story NW-04) runs as **one** transaction with a fixed lock order, so orders of one user serialize and never deadlock:
+  1. lock the user row (`SELECT … FOR UPDATE`; missing → `domain.ErrUserNotFound`);
+  2. lock the position for `(user_id, stock_id)` (it may not exist yet);
+  3. if an `Idempotency-Key` was sent, look up the user's order with that key; when it exists, return it with `created=false` and change nothing. Because step 1 serializes the user, a concurrent retry waits for the first order and then finds it here. A unique violation on `idx_orders_user_idempotency_key` (SQLSTATE 23505) is the last line of defence: the transaction rolls back and the existing order is returned;
+  4. BUY: `balance < total` → `domain.ErrInsufficientFunds`; debit the total, add the shares at the weighted average fill price (rounded half-up to 2 decimals). SELL: no position or too few shares → `domain.ErrInsufficientShares`; credit the total, keep the average, delete the position at zero;
+  5. update only the `balance` column of the user (never `Save` the whole row), insert a `FILLED` `models.Order`, return it as a `domain.Order`.
+- Domain errors leave the repository unwrapped (or wrapped with `%w`) so services and handlers can use `errors.Is`.
+- Stocks are created race-safely with `INSERT … ON CONFLICT (orderbook_id) DO NOTHING` followed by an unscoped re-select (`EnsureStock`), so concurrent first orders for one instrument share one row.
+- Behaviour that needs real Postgres (locks, unique indexes, migrations) is covered by `internal/repository/order_integration_test.go` (build tag `integration`, `TEST_DATABASE_URL`; skipped by `go test ./...`).
 
 ### 3.5. Concurrent Quote Fetching
 - Run parallel fetches in goroutines using `sync.WaitGroup`.
@@ -100,14 +109,18 @@ type Registrar interface {
 ### 3.6. Error Handling & HTTP Status Codes
 - Define domain-specific errors in `internal/domain/errors.go`.
 - Repositories translate `gorm.ErrRecordNotFound` to domain errors.
-- Handlers map them to HTTP status codes (400, 401, 403, 404, 409, 429, 500).
-- Standard JSON error format: `{"error": "description of the error"}`
+- Handlers map them to HTTP status codes (400, 401, 403, 404, 409, 422, 429, 500).
+- Standard JSON error format (`domain.ErrorResponse`, `api/openapi.yaml#/components/schemas/Error`): `{"error": "description of the error", "code": "MACHINE_CODE"}`. Codes live next to their errors (`internal/domain/auth.go`, `market.go`, `orders.go`).
+- Order errors: `ErrInsufficientFunds` → 422 `INSUFFICIENT_FUNDS`, `ErrInsufficientShares` → 422 `INSUFFICIENT_SHARES`, `ErrIdempotencyKeyReused` → 409 `CONFLICT`; invalid requests (`*ValidationError`) → 400 `VALIDATION_ERROR`, unknown instruments → 404 `INSTRUMENT_NOT_FOUND`.
 
 ### 3.7. GORM Models & Automatic Migrations
-- Use explicit GORM tags (`primaryKey`, `uniqueIndex`, `numeric(15,2)`, `numeric(15,4)`).
+- Use explicit GORM tags (`primaryKey`, `uniqueIndex`, `type:numeric(18,2)`, `type:numeric(18,4)`).
+- **Money is `decimal.Decimal`** (`github.com/shopspring/decimal`), never `float64`: cash and prices are `numeric(18,2)`, share quantities `numeric(18,4)`. All arithmetic stays in `decimal`; values are rounded half-up to 2 decimals only at the edges (pricing, average price, JSON via `domain.MoneyFloat` / `domain.Order.MarshalJSON`).
+- Stocks are identified by `orderbook_id` (unique); `symbol` is only indexed for lookup, since symbols repeat across markets.
+- `models.Order` is the order log. `models.Transaction` is the pre-NW-04 trade log: it is still migrated (old rows survive) and purged with guests, but **no longer written**.
 - Use `gorm.DeletedAt` for soft-deletable entities.
 - Mark sensitive fields with `json:"-"`.
-- **Auto-migration:** Every new model **MUST** be added to `internal/integrations/database/migrate.go`.
+- **Auto-migration:** Every new model **MUST** be added to `internal/integrations/database/migrate.go`. When a change cannot be expressed by AutoMigrate alone (e.g. backfilling a new NOT NULL column, dropping an old index), add idempotent SQL in `migrate.go` around the AutoMigrate call, as done for `stocks.orderbook_id`.
 
 ### 3.8. Market Data Port
 - `domain.MarketDataProvider` (`internal/domain/market.go`) is the port for market data: `Search`, `Quote`, `Details`, `Candles`. It speaks only domain DTOs (`InstrumentSummary`, `Quote`, `InstrumentDetails`, `Candle`) and errors (`ErrInstrumentNotFound` → 404, `ErrMarketDataUnavailable` → 502, `*ValidationError` → 400). No upstream JSON leaves an adapter.

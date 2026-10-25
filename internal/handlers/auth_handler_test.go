@@ -75,7 +75,7 @@ func TestAuthHandler_Guest(t *testing.T) {
 		body := decodeObject(t, w)
 		want := map[string]any{
 			"role": domain.RoleGuest, "is_guest": true,
-			"balance": domain.GuestStartingBalance, "name": domain.GuestName,
+			"balance": domain.MoneyFloat(domain.GuestStartingBalance), "name": domain.GuestName,
 		}
 		for k, v := range want {
 			if body[k] != v {

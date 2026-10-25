@@ -14,20 +14,6 @@ type WatchlistItemRequest struct {
 	Name   string `json:"name"` // Fallback name
 }
 
-type OrderRequest struct {
-	Symbol   string  `json:"symbol" binding:"required"`
-	Name     string  `json:"name"`                                   // Used if stock doesn't exist in DB yet
-	Type     string  `json:"type" binding:"required,oneof=BUY SELL"` // BUY, SELL
-	Quantity float64 `json:"quantity" binding:"required,gt=0"`
-}
-
-type OrderRepository interface {
-	// ExecuteTransaction handles the DB transaction: updates user balance, updates/creates position, creates transaction record
-	ExecuteTransaction(ctx context.Context, userID uint, stockID uint, orderType string, quantity float64, price float64, total float64) error
-	GetPosition(ctx context.Context, userID uint, stockID uint) (*models.Position, error)
-	EnsureStock(ctx context.Context, symbol, name string) (*models.Stock, error)
-}
-
 type WatchlistRepository interface {
 	Create(ctx context.Context, userID uint, name string) (*models.Watchlist, error)
 	GetUserWatchlists(ctx context.Context, userID uint) ([]models.Watchlist, error)
