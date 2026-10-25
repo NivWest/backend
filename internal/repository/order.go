@@ -160,8 +160,9 @@ func (r *orderRepo) Execute(ctx context.Context, p domain.ExecuteOrderParams) (*
 			return fmt.Errorf("update balance: %w", err)
 		}
 
-		// (f) Record the filled order.
-		now := time.Now().UTC()
+		// (f) Record the filled order. Postgres timestamptz keeps microseconds, so truncate now:
+		// the order returned here must equal what a later read (an idempotent replay) returns.
+		now := time.Now().UTC().Truncate(time.Microsecond)
 		orderType := p.Type
 		if orderType == "" {
 			orderType = domain.OrderTypeMarket
@@ -188,8 +189,13 @@ func (r *orderRepo) Execute(ctx context.Context, p domain.ExecuteOrderParams) (*
 			return fmt.Errorf("insert order: %w", err)
 		}
 
-		// (g) Map for the caller.
-		result, created = toDomainOrder(&order, &stock), true
+		// (g) Re-read the stored row and map it, so the created response is exactly what a later read
+		// (an idempotent replay) returns: same timestamp precision and same decimal scale.
+		var stored models.Order
+		if err := tx.Take(&stored, order.ID).Error; err != nil {
+			return fmt.Errorf("reload order %d: %w", order.ID, err)
+		}
+		result, created = toDomainOrder(&stored, &stock), true
 		return nil
 	})
 	if err != nil {
@@ -256,7 +262,14 @@ func isIdempotencyKeyViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation && pgErr.ConstraintName == orderIdempotencyIndex
 }
 
+// toDomainOrder maps a stored order; timestamps are normalized to UTC so a freshly created order and
+// the same order read back from Postgres (which scans timestamptz in the connection's location) are equal.
 func toDomainOrder(o *models.Order, s *models.Stock) *domain.Order {
+	var filledAt *time.Time
+	if o.FilledAt != nil {
+		t := o.FilledAt.UTC()
+		filledAt = &t
+	}
 	return &domain.Order{
 		ID:          o.ID,
 		OrderbookID: s.OrderbookID,
@@ -269,7 +282,7 @@ func toDomainOrder(o *models.Order, s *models.Stock) *domain.Order {
 		FillPrice:   o.FillPrice,
 		Commission:  o.Commission,
 		Total:       o.Total,
-		CreatedAt:   o.CreatedAt,
-		FilledAt:    o.FilledAt,
+		CreatedAt:   o.CreatedAt.UTC(),
+		FilledAt:    filledAt,
 	}
 }
