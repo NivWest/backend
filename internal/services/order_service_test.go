@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -389,4 +390,249 @@ func TestOrderService_PlaceOrder_RepositoryErrorsPassThrough(t *testing.T) {
 			t.Error("Execute must not run when EnsureStock fails")
 		}
 	})
+}
+
+// ---------------------------------------------------------------------------
+// ListOrders
+// ---------------------------------------------------------------------------
+
+// keysetOrders returns a ListByUserFn over a fixed set of orders per user that follows the
+// domain.OrderRepository contract (newest first by created_at desc, id desc; strictly after before; at
+// most limit). It records every requested limit in limits.
+func keysetOrders(byUser map[uint][]domain.Order, limits *[]int) func(context.Context, uint, *domain.OrderCursor, int) ([]domain.Order, error) {
+	return func(_ context.Context, userID uint, before *domain.OrderCursor, limit int) ([]domain.Order, error) {
+		if limits != nil {
+			*limits = append(*limits, limit)
+		}
+		items := append([]domain.Order(nil), byUser[userID]...)
+		newer := func(a, b domain.Order) bool {
+			if !a.CreatedAt.Equal(b.CreatedAt) {
+				return a.CreatedAt.After(b.CreatedAt)
+			}
+			return a.ID > b.ID
+		}
+		sort.Slice(items, func(i, j int) bool { return newer(items[i], items[j]) })
+		page := []domain.Order{}
+		for _, o := range items {
+			if before != nil && !newer(domain.Order{CreatedAt: before.CreatedAt, ID: before.ID}, o) {
+				continue
+			}
+			if len(page) == limit {
+				break
+			}
+			page = append(page, o)
+		}
+		return page, nil
+	}
+}
+
+var listBase = time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)
+
+// orderAt is an order with id created minute minutes plus micro microseconds after listBase.
+func orderAt(id uint, minute int, micro int) domain.Order {
+	return domain.Order{ID: id, OrderbookID: "SIM-FJRD", CreatedAt: listBase.Add(time.Duration(minute)*time.Minute + time.Duration(micro)*time.Microsecond)}
+}
+
+func ids(orders []domain.Order) []uint {
+	out := make([]uint, len(orders))
+	for i, o := range orders {
+		out[i] = o.ID
+	}
+	return out
+}
+
+func equalIDs(a, b []uint) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func listService(byUser map[uint][]domain.Order, limits *[]int) *OrderService {
+	return newTestOrderService(&testutil.OrderRepo{ListByUserFn: keysetOrders(byUser, limits)}, fjrdProvider())
+}
+
+func TestOrderService_ListOrders_Empty(t *testing.T) {
+	page, err := newTestOrderService(&testutil.OrderRepo{}, fjrdProvider()).ListOrders(context.Background(), 1, domain.DefaultOrderPageLimit, "")
+	if err != nil {
+		t.Fatalf("ListOrders() error = %v", err)
+	}
+	if page.Items == nil || len(page.Items) != 0 || page.NextCursor != nil {
+		t.Errorf("page = %+v, want non-nil empty items and nil cursor", page)
+	}
+}
+
+func TestOrderService_ListOrders_ExactlyLimit(t *testing.T) {
+	var limits []int
+	svc := listService(map[uint][]domain.Order{1: {orderAt(1, 1, 0), orderAt(2, 2, 0), orderAt(3, 3, 0)}}, &limits)
+	page, err := svc.ListOrders(context.Background(), 1, 3, "")
+	if err != nil {
+		t.Fatalf("ListOrders() error = %v", err)
+	}
+	if got := ids(page.Items); !equalIDs(got, []uint{3, 2, 1}) {
+		t.Errorf("ids = %v, want [3 2 1]", got)
+	}
+	if page.NextCursor != nil {
+		t.Errorf("NextCursor = %q, want nil on the last page", *page.NextCursor)
+	}
+	if len(limits) != 1 || limits[0] != 4 {
+		t.Errorf("repository limits = %v, want [4] (limit+1)", limits)
+	}
+}
+
+func TestOrderService_ListOrders_PagesWithCursor(t *testing.T) {
+	// Microsecond timestamps as Postgres stores them; the cursor must keep them exact.
+	orders := []domain.Order{orderAt(1, 1, 111111), orderAt(2, 2, 222222), orderAt(3, 3, 333333), orderAt(4, 4, 444444), orderAt(5, 5, 555555)}
+	svc := listService(map[uint][]domain.Order{1: orders}, nil)
+	ctx := context.Background()
+
+	first, err := svc.ListOrders(ctx, 1, 2, "")
+	if err != nil {
+		t.Fatalf("first page error = %v", err)
+	}
+	if got := ids(first.Items); !equalIDs(got, []uint{5, 4}) || first.NextCursor == nil {
+		t.Fatalf("first page = %v cursor %v, want [5 4] with a cursor", got, first.NextCursor)
+	}
+	wantCursor := encodeOrderCursor(domain.OrderCursor{CreatedAt: orders[3].CreatedAt, ID: 4})
+	if *first.NextCursor != wantCursor {
+		t.Errorf("NextCursor = %q, want the cursor of the last item %q", *first.NextCursor, wantCursor)
+	}
+
+	second, err := svc.ListOrders(ctx, 1, 2, *first.NextCursor)
+	if err != nil {
+		t.Fatalf("second page error = %v", err)
+	}
+	if got := ids(second.Items); !equalIDs(got, []uint{3, 2}) || second.NextCursor == nil {
+		t.Fatalf("second page = %v cursor %v, want [3 2] with a cursor", got, second.NextCursor)
+	}
+
+	third, err := svc.ListOrders(ctx, 1, 2, *second.NextCursor)
+	if err != nil {
+		t.Fatalf("third page error = %v", err)
+	}
+	if got := ids(third.Items); !equalIDs(got, []uint{1}) || third.NextCursor != nil {
+		t.Errorf("third page = %v cursor %v, want [1] without a cursor", got, third.NextCursor)
+	}
+}
+
+func TestOrderService_ListOrders_EqualCreatedAtOrderedByID(t *testing.T) {
+	// Four orders in the same microsecond: the id breaks the tie, also across a page boundary.
+	same := []domain.Order{orderAt(10, 0, 7), orderAt(11, 0, 7), orderAt(12, 0, 7), orderAt(13, 0, 7), orderAt(9, -1, 0)}
+	svc := listService(map[uint][]domain.Order{1: same}, nil)
+	var got []uint
+	cursor := ""
+	for i := 0; i < 10; i++ {
+		page, err := svc.ListOrders(context.Background(), 1, 2, cursor)
+		if err != nil {
+			t.Fatalf("ListOrders() error = %v", err)
+		}
+		got = append(got, ids(page.Items)...)
+		if page.NextCursor == nil {
+			break
+		}
+		cursor = *page.NextCursor
+	}
+	if !equalIDs(got, []uint{13, 12, 11, 10, 9}) {
+		t.Errorf("ids across pages = %v, want [13 12 11 10 9]", got)
+	}
+}
+
+func TestOrderService_ListOrders_OnlyOwnOrders(t *testing.T) {
+	repo := &testutil.OrderRepo{}
+	svc := newTestOrderService(repo, fjrdProvider())
+	ctx := context.Background()
+	for _, userID := range []uint{1, 2, 1} {
+		if _, _, err := svc.PlaceOrder(ctx, userID, "", buy("1")); err != nil {
+			t.Fatalf("PlaceOrder() error = %v", err)
+		}
+	}
+
+	mine, err := svc.ListOrders(ctx, 1, domain.MaxOrderPageLimit, "")
+	if err != nil {
+		t.Fatalf("ListOrders(user 1) error = %v", err)
+	}
+	if got := ids(mine.Items); !equalIDs(got, []uint{3, 1}) || mine.NextCursor != nil {
+		t.Errorf("user 1 page = %v cursor %v, want [3 1] without a cursor", got, mine.NextCursor)
+	}
+
+	other, err := svc.ListOrders(ctx, 3, domain.DefaultOrderPageLimit, "")
+	if err != nil {
+		t.Fatalf("ListOrders(user 3) error = %v", err)
+	}
+	if other.Items == nil || len(other.Items) != 0 || other.NextCursor != nil {
+		t.Errorf("user 3 page = %+v, want empty", other)
+	}
+
+	// A cursor taken from user 1's list does not reveal another user's orders.
+	page, err := svc.ListOrders(ctx, 1, 1, "")
+	if err != nil || page.NextCursor == nil {
+		t.Fatalf("ListOrders(user 1, limit 1) = %+v, %v", page, err)
+	}
+	foreign, err := svc.ListOrders(ctx, 3, 1, *page.NextCursor)
+	if err != nil || len(foreign.Items) != 0 {
+		t.Errorf("user 3 with user 1's cursor = %+v, %v; want empty", foreign, err)
+	}
+}
+
+func TestOrderService_ListOrders_InvalidInput(t *testing.T) {
+	tests := []struct {
+		name    string
+		limit   int
+		cursor  string
+		wantMsg string
+	}{
+		{name: "limit 0", limit: 0, wantMsg: "limit must be an integer from 1 to 100"},
+		{name: "limit -1", limit: -1, wantMsg: "limit must be an integer from 1 to 100"},
+		{name: "limit 101", limit: domain.MaxOrderPageLimit + 1, wantMsg: "limit must be an integer from 1 to 100"},
+		{name: "garbage cursor", limit: 20, cursor: "garbage!", wantMsg: "cursor is invalid"},
+		{name: "cursor with id 0", limit: 20, cursor: "eyJjIjoiMjAyNi0xMC0yNlQwOTo0MjowMFoiLCJpIjowfQ", wantMsg: "cursor is invalid"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			called := false
+			repo := &testutil.OrderRepo{ListByUserFn: func(context.Context, uint, *domain.OrderCursor, int) ([]domain.Order, error) {
+				called = true
+				return []domain.Order{}, nil
+			}}
+			_, err := newTestOrderService(repo, fjrdProvider()).ListOrders(context.Background(), 1, tt.limit, tt.cursor)
+			var verr *domain.ValidationError
+			if !errors.As(err, &verr) {
+				t.Fatalf("error = %v, want *domain.ValidationError", err)
+			}
+			if verr.Msg != tt.wantMsg {
+				t.Errorf("Msg = %q, want %q", verr.Msg, tt.wantMsg)
+			}
+			if called {
+				t.Error("the repository must not be called for invalid input")
+			}
+		})
+	}
+}
+
+func TestOrderService_ListOrders_LimitBounds(t *testing.T) {
+	for _, limit := range []int{1, domain.MaxOrderPageLimit} {
+		var limits []int
+		if _, err := listService(nil, &limits).ListOrders(context.Background(), 1, limit, ""); err != nil {
+			t.Errorf("ListOrders(limit %d) error = %v", limit, err)
+		}
+		if len(limits) != 1 || limits[0] != limit+1 {
+			t.Errorf("limit %d: repository limits = %v, want [%d]", limit, limits, limit+1)
+		}
+	}
+}
+
+func TestOrderService_ListOrders_RepositoryError(t *testing.T) {
+	boom := errors.New("db down")
+	repo := &testutil.OrderRepo{ListByUserFn: func(context.Context, uint, *domain.OrderCursor, int) ([]domain.Order, error) {
+		return nil, boom
+	}}
+	_, err := newTestOrderService(repo, fjrdProvider()).ListOrders(context.Background(), 1, 20, "")
+	if !errors.Is(err, boom) {
+		t.Errorf("error = %v, want wrapping %v", err, boom)
+	}
 }
