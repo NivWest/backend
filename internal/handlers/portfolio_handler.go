@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log"
 	"net/http"
 
 	"backend/internal/domain"
@@ -25,21 +26,24 @@ func (h *PortfolioHandler) Register(v1 *gin.RouterGroup) {
 	portfolio := v1.Group("/portfolio")
 	portfolio.Use(middleware.RequireAuth(h.auth))
 
-	portfolio.GET("/dashboard", h.Dashboard)
+	portfolio.GET("", h.GetPortfolio)
 }
 
-func (h *PortfolioHandler) Dashboard(c *gin.Context) {
+// GetPortfolio handles GET /portfolio: 200 with the signed-in user's domain.Portfolio.
+func (h *PortfolioHandler) GetPortfolio(c *gin.Context) {
 	user, ok := middleware.CurrentUser(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		c.JSON(http.StatusUnauthorized, domain.ErrorResponse{Error: "authentication required", Code: domain.CodeUnauthenticated})
 		return
 	}
 
-	dashboard, err := h.service.GetDashboard(c.Request.Context(), user.ID)
+	portfolio, err := h.service.GetPortfolio(c.Request.Context(), user.ID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch portfolio dashboard"})
+		// Log the user id only (never the session or the email).
+		log.Printf("[PORTFOLIO] internal error for user_id=%d: %v", user.ID, err)
+		c.JSON(http.StatusInternalServerError, domain.ErrorResponse{Error: "internal server error", Code: domain.CodeInternal})
 		return
 	}
 
-	c.JSON(http.StatusOK, dashboard)
+	c.JSON(http.StatusOK, portfolio)
 }
