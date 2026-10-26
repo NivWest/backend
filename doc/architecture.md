@@ -95,16 +95,18 @@ type Registrar interface {
   1. lock the user row (`SELECT … FOR UPDATE`; missing → `domain.ErrUserNotFound`);
   2. lock the position for `(user_id, stock_id)` (it may not exist yet);
   3. if an `Idempotency-Key` was sent, look up the user's order with that key; when it exists, return it with `created=false` and change nothing. Because step 1 serializes the user, a concurrent retry waits for the first order and then finds it here. A unique violation on `idx_orders_user_idempotency_key` (SQLSTATE 23505) is the last line of defence: the transaction rolls back and the existing order is returned;
-  4. BUY: `balance < total` → `domain.ErrInsufficientFunds`; debit the total, add the shares at the weighted average fill price (rounded half-up to 2 decimals). SELL: no position or too few shares → `domain.ErrInsufficientShares`; credit the total, keep the average, delete the position at zero;
-  5. update only the `balance` column of the user (never `Save` the whole row), insert a `FILLED` `models.Order`, return it as a `domain.Order`.
+  4. BUY: `balance < total` → `domain.ErrInsufficientFunds`; debit the total, add the shares; `avg_price` stays the weighted average **fill** price (rounded half-up to 2 decimals), while `avg_cost` becomes the cost basis **including commission**, `(avg_cost × old qty + total) / new qty` rounded half-up to 8 decimals (`domain.NextAvgCost`, `internal/domain/pnl.go`, story NW-05). SELL: no position or too few shares → `domain.ErrInsufficientShares`; credit the total, add `domain.RealizedPnL(total, avg_cost, qty)` (`total − avg_cost × qty`, 2 decimals) to `users.realized_pnl`, leave `avg_price` and `avg_cost` unchanged, delete the position at zero;
+  5. update only the `balance` column and, on a SELL, `realized_pnl` of the user in one `UPDATE` (never `Save` the whole row), insert a `FILLED` `models.Order`, return it as a `domain.Order`.
 - Domain errors leave the repository unwrapped (or wrapped with `%w`) so services and handlers can use `errors.Is`.
 - Stocks are created race-safely with `INSERT … ON CONFLICT (orderbook_id) DO NOTHING` followed by an unscoped re-select (`EnsureStock`), so concurrent first orders for one instrument share one row.
 - Behaviour that needs real Postgres (locks, unique indexes, migrations) is covered by `internal/repository/order_integration_test.go` (build tag `integration`, `TEST_DATABASE_URL`; skipped by `go test ./...`).
+- **Order history** (`GET /orders`, story NW-05) is keyset-paginated, never `OFFSET`: `OrderRepository.ListByUser` (`internal/repository/order_list.go`) reads the user's orders by `(created_at, id)` descending over `idx_orders_user_created_id`, and from a cursor only rows with `(created_at, id) < (cursor)`. `OrderService.ListOrders` asks for `limit + 1` rows to know whether a `next_cursor` exists. The cursor is opaque base64url JSON (`{"c": created_at RFC3339Nano UTC, "i": id}`), encoded and decoded only in `internal/services/order_cursor.go`; a malformed one is a 400 `VALIDATION_ERROR`. `limit` is 1–100 (`domain.MaxOrderPageLimit`), default 20 (`domain.DefaultOrderPageLimit`). The response is `{items, next_cursor}`, `next_cursor` null on the last page.
 
 ### 3.5. Concurrent Quote Fetching
 - Run parallel fetches in goroutines using `sync.WaitGroup`.
-- Guard slice appends and shared data mutations with `sync.Mutex`.
-- Include fallback logic (e.g., if live quote fails, fall back to `AvgPrice`).
+- Guard slice appends and shared data mutations with `sync.Mutex`, or let each goroutine write only its own pre-sized slice element.
+- Include fallback logic (e.g., if a live quote fails, value the position at its `avg_cost`).
+- **Portfolio** (`GET /portfolio`, `PortfolioService.GetPortfolio`, story NW-05; replaces `/portfolio/dashboard`): quotes every position concurrently by `orderbook_id`; a failed quote or one without a positive last price values the position at `avg_cost` with a day change of 0. All math is `decimal` (cost = `avg_cost × qty`, so unrealized P&L includes the buy commission) and rounds half-up only when the `domain.Portfolio` DTO is filled. It returns `cash`, `holdings_value`, `total_equity`, `unrealized_pnl`, `realized_pnl` (from `users.realized_pnl`) and `positions` sorted by market value desc, then `orderbook_id` asc; `top_movers` holds at most 5 (`domain.MaxTopMovers`) sorted by day change desc, then `orderbook_id`.
 
 ### 3.6. Error Handling & HTTP Status Codes
 - Define domain-specific errors in `internal/domain/errors.go`.
@@ -121,6 +123,7 @@ type Registrar interface {
 - Use `gorm.DeletedAt` for soft-deletable entities.
 - Mark sensitive fields with `json:"-"`.
 - **Auto-migration:** Every new model **MUST** be added to `internal/integrations/database/migrate.go`. When a change cannot be expressed by AutoMigrate alone (e.g. backfilling a new NOT NULL column, dropping an old index), add idempotent SQL in `migrate.go` around the AutoMigrate call, as done for `stocks.orderbook_id`.
+- `positions.avg_cost` (`numeric(20,8)`) and `users.realized_pnl` (`numeric(18,2)`) arrive with default 0 (story NW-05). `backfillAvgCost` then sets `avg_cost = avg_price` where `avg_cost = 0`: the buy commission of legacy lots was never recorded, so the average fill price is their best available cost basis. It is idempotent, since every NW-05 BUY writes a positive `avg_cost`.
 
 ### 3.8. Market Data Port
 - `domain.MarketDataProvider` (`internal/domain/market.go`) is the port for market data: `Search`, `Quote`, `Details`, `Candles`. It speaks only domain DTOs (`InstrumentSummary`, `Quote`, `InstrumentDetails`, `Candle`) and errors (`ErrInstrumentNotFound` → 404, `ErrMarketDataUnavailable` → 502, `*ValidationError` → 400). No upstream JSON leaves an adapter.
