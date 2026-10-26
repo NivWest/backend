@@ -8,6 +8,7 @@ package testutil
 import (
 	"context"
 	"errors"
+	"sort"
 	"sync"
 	"time"
 
@@ -189,6 +190,7 @@ type OrderRepo struct {
 	EnsureStockFn          func(ctx context.Context, orderbookID, symbol, name string) (uint, error)
 	FindByIdempotencyKeyFn func(ctx context.Context, userID uint, key string) (*domain.Order, error)
 	ExecuteFn              func(ctx context.Context, p domain.ExecuteOrderParams) (*domain.Order, bool, error)
+	ListByUserFn           func(ctx context.Context, userID uint, before *domain.OrderCursor, limit int) ([]domain.Order, error)
 
 	// keys maps each created order (by index in Orders) to its user and idempotency key.
 	keys []orderKey
@@ -268,6 +270,40 @@ func (r *OrderRepo) Execute(ctx context.Context, p domain.ExecuteOrderParams) (*
 	r.keys = append(r.keys, orderKey{userID: p.UserID, key: p.IdempotencyKey})
 	cp := *o
 	return &cp, true, nil
+}
+
+// ListByUser returns copies of the user's orders Execute created, newest first (created_at desc, then id
+// desc), strictly after before when it is set, at most limit of them.
+func (r *OrderRepo) ListByUser(ctx context.Context, userID uint, before *domain.OrderCursor, limit int) ([]domain.Order, error) {
+	if r.ListByUserFn != nil {
+		return r.ListByUserFn(ctx, userID, before, limit)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	items := []domain.Order{}
+	for i, k := range r.keys {
+		if k.userID == userID {
+			items = append(items, *r.Orders[i])
+		}
+	}
+	newerFirst := func(a, b domain.Order) bool {
+		if !a.CreatedAt.Equal(b.CreatedAt) {
+			return a.CreatedAt.After(b.CreatedAt)
+		}
+		return a.ID > b.ID
+	}
+	sort.Slice(items, func(i, j int) bool { return newerFirst(items[i], items[j]) })
+	page := []domain.Order{}
+	for _, o := range items {
+		if before != nil && !newerFirst(domain.Order{CreatedAt: before.CreatedAt, ID: before.ID}, o) {
+			continue
+		}
+		if len(page) == limit {
+			break
+		}
+		page = append(page, o)
+	}
+	return page, nil
 }
 
 // findLocked returns a copy of the user's order stored under key, or nil. r.mu must be held.
