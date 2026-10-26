@@ -114,6 +114,41 @@ func (s *OrderService) PlaceOrder(ctx context.Context, userID uint, idempotencyK
 	return order, true, nil
 }
 
+// ListOrders returns one page of userID's orders, newest first (created_at desc, then id desc). limit
+// must be 1..domain.MaxOrderPageLimit; cursor is "" for the first page or a next_cursor from an earlier
+// page. Items is never nil; NextCursor is nil on the last page.
+//
+// Errors: *domain.ValidationError for a bad limit or cursor, otherwise whatever the repository returns.
+func (s *OrderService) ListOrders(ctx context.Context, userID uint, limit int, cursor string) (*domain.OrderPage, error) {
+	if limit < 1 || limit > domain.MaxOrderPageLimit {
+		return nil, &domain.ValidationError{Msg: fmt.Sprintf("limit must be an integer from 1 to %d", domain.MaxOrderPageLimit)}
+	}
+	var before *domain.OrderCursor
+	if cursor != "" {
+		c, err := decodeOrderCursor(cursor)
+		if err != nil {
+			return nil, err
+		}
+		before = &c
+	}
+
+	// One extra row tells whether another page follows without a separate count query.
+	orders, err := s.repo.ListByUser(ctx, userID, before, limit+1)
+	if err != nil {
+		return nil, fmt.Errorf("list orders: %w", err)
+	}
+
+	page := &domain.OrderPage{Items: make([]domain.Order, 0, min(len(orders), limit))}
+	if len(orders) > limit {
+		orders = orders[:limit]
+		last := orders[limit-1]
+		next := encodeOrderCursor(domain.OrderCursor{CreatedAt: last.CreatedAt, ID: last.ID})
+		page.NextCursor = &next
+	}
+	page.Items = append(page.Items, orders...)
+	return page, nil
+}
+
 // replay returns an order stored under the request's idempotency key, provided it was placed with the
 // same orderbook_id, side, quantity and type; otherwise the key was reused for a different order.
 func replay(existing *domain.Order, req domain.OrderRequest) (*domain.Order, bool, error) {

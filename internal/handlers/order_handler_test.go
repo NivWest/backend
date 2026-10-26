@@ -3,10 +3,12 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -242,4 +244,156 @@ func TestOrderHandler_PlaceOrder_Unauthenticated(t *testing.T) {
 		expectStatus(t, w, http.StatusUnauthorized)
 		expectErrorCode(t, w, domain.CodeUnauthenticated)
 	})
+}
+
+// ---------------------------------------------------------------------------
+// GET /orders
+// ---------------------------------------------------------------------------
+
+// getOrders sends GET /api/v1/orders with the given raw query and optional session.
+func getOrders(t *testing.T, r http.Handler, session, query string) *httptest.ResponseRecorder {
+	t.Helper()
+	path := "/api/v1/orders"
+	if query != "" {
+		path += "?" + query
+	}
+	return do(t, r, http.MethodGet, path, session, nil)
+}
+
+// orderPageBody is the decoded OrderPage; NextCursor stays a raw message so null is distinguishable.
+type orderPageBody struct {
+	Items      []map[string]any `json:"items"`
+	NextCursor json.RawMessage  `json:"next_cursor"`
+}
+
+func decodeOrderPage(t *testing.T, w *httptest.ResponseRecorder) (orderPageBody, *string) {
+	t.Helper()
+	var page orderPageBody
+	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode OrderPage: %v (body %s)", err, w.Body.String())
+	}
+	var cursor *string
+	if err := json.Unmarshal(page.NextCursor, &cursor); err != nil {
+		t.Fatalf("next_cursor must be a string or null: %s", w.Body.String())
+	}
+	return page, cursor
+}
+
+func TestOrderHandler_ListOrders_EmptyShape(t *testing.T) {
+	w := getOrders(t, orderEngine(&testutil.OrderRepo{}, fjrdMarket()), memberSession, "")
+	expectStatus(t, w, http.StatusOK)
+	if got := w.Body.String(); got != `{"items":[],"next_cursor":null}` {
+		t.Errorf("body = %s, want {\"items\":[],\"next_cursor\":null}", got)
+	}
+}
+
+func TestOrderHandler_ListOrders_PagesWithLimitOne(t *testing.T) {
+	repo := &testutil.OrderRepo{}
+	r := orderEngine(repo, fjrdMarket())
+	expectStatus(t, postOrder(t, r, memberSession, "", buy10), http.StatusCreated)
+	expectStatus(t, postOrder(t, r, memberSession, "", `{"orderbook_id":"SIM-FJRD","side":"SELL","quantity":4}`), http.StatusCreated)
+
+	first := getOrders(t, r, memberSession, "limit=1")
+	expectStatus(t, first, http.StatusOK)
+	page, cursor := decodeOrderPage(t, first)
+	if len(page.Items) != 1 || page.Items[0]["id"] != float64(2) || page.Items[0]["side"] != "SELL" {
+		t.Fatalf("first page items = %v, want the newest order (id 2, SELL)", page.Items)
+	}
+	if cursor == nil || *cursor == "" {
+		t.Fatalf("first page next_cursor = null, want a cursor: %s", first.Body.String())
+	}
+	for _, key := range []string{"orderbook_id", "symbol", "name", "type", "status", "quantity", "fill_price", "commission", "total", "created_at", "filled_at"} {
+		if _, ok := page.Items[0][key]; !ok {
+			t.Errorf("order lacks %q: %s", key, first.Body.String())
+		}
+	}
+
+	second := getOrders(t, r, memberSession, "limit=1&cursor="+url.QueryEscape(*cursor))
+	expectStatus(t, second, http.StatusOK)
+	page, cursor = decodeOrderPage(t, second)
+	if len(page.Items) != 1 || page.Items[0]["id"] != float64(1) || page.Items[0]["side"] != "BUY" {
+		t.Fatalf("second page items = %v, want the older order (id 1, BUY)", page.Items)
+	}
+	if cursor != nil {
+		t.Errorf("second page next_cursor = %q, want null", *cursor)
+	}
+
+	all := getOrders(t, r, memberSession, "")
+	expectStatus(t, all, http.StatusOK)
+	if page, cursor := decodeOrderPage(t, all); len(page.Items) != 2 || cursor != nil {
+		t.Errorf("default page = %d items, cursor %v; want 2 items, null", len(page.Items), cursor)
+	}
+
+	other := getOrders(t, r, adminSession, "")
+	expectStatus(t, other, http.StatusOK)
+	if got := other.Body.String(); got != `{"items":[],"next_cursor":null}` {
+		t.Errorf("another user's page = %s, want empty", got)
+	}
+}
+
+func TestOrderHandler_ListOrders_DefaultLimit(t *testing.T) {
+	var gotLimit int
+	repo := &testutil.OrderRepo{ListByUserFn: func(_ context.Context, userID uint, _ *domain.OrderCursor, limit int) ([]domain.Order, error) {
+		gotLimit = limit
+		if userID != 1 {
+			t.Errorf("ListByUser user = %d, want 1", userID)
+		}
+		return []domain.Order{}, nil
+	}}
+	expectStatus(t, getOrders(t, orderEngine(repo, fjrdMarket()), memberSession, ""), http.StatusOK)
+	if gotLimit != domain.DefaultOrderPageLimit+1 {
+		t.Errorf("repository limit = %d, want %d", gotLimit, domain.DefaultOrderPageLimit+1)
+	}
+}
+
+func TestOrderHandler_ListOrders_BadRequests(t *testing.T) {
+	queries := map[string]string{
+		"limit=0":       "limit=0",
+		"limit=abc":     "limit=abc",
+		"limit=101":     "limit=101",
+		"limit=-5":      "limit=-5",
+		"limit=1.5":     "limit=1.5",
+		"empty limit":   "limit=",
+		"bad cursor":    "cursor=not-a-cursor",
+		"tampered json": "cursor=" + url.QueryEscape("eyJjIjoibm93IiwiaSI6NDN9"),
+	}
+	for name, query := range queries {
+		t.Run(name, func(t *testing.T) {
+			called := false
+			repo := &testutil.OrderRepo{ListByUserFn: func(context.Context, uint, *domain.OrderCursor, int) ([]domain.Order, error) {
+				called = true
+				return []domain.Order{}, nil
+			}}
+			w := getOrders(t, orderEngine(repo, fjrdMarket()), memberSession, query)
+			expectStatus(t, w, http.StatusBadRequest)
+			expectErrorCode(t, w, domain.CodeValidation)
+			if called {
+				t.Error("the repository must not be called for an invalid request")
+			}
+		})
+	}
+
+	t.Run("limit message", func(t *testing.T) {
+		w := getOrders(t, orderEngine(&testutil.OrderRepo{}, fjrdMarket()), memberSession, "limit=abc")
+		if !strings.Contains(w.Body.String(), `"error":"limit must be an integer from 1 to 100"`) {
+			t.Errorf("body = %s", w.Body.String())
+		}
+	})
+}
+
+func TestOrderHandler_ListOrders_RepositoryFailure(t *testing.T) {
+	repo := &testutil.OrderRepo{ListByUserFn: func(context.Context, uint, *domain.OrderCursor, int) ([]domain.Order, error) {
+		return nil, errors.New("db down")
+	}}
+	w := getOrders(t, orderEngine(repo, fjrdMarket()), memberSession, "")
+	expectStatus(t, w, http.StatusInternalServerError)
+	expectErrorCode(t, w, domain.CodeInternal)
+}
+
+func TestOrderHandler_ListOrders_Unauthenticated(t *testing.T) {
+	for _, session := range []string{"", "unknown-session"} {
+		w := getOrders(t, orderEngine(&testutil.OrderRepo{}, fjrdMarket()), session, "")
+		expectStatus(t, w, http.StatusUnauthorized)
+		expectErrorCode(t, w, domain.CodeUnauthenticated)
+	}
 }
