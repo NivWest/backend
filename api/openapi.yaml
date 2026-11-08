@@ -33,6 +33,8 @@ tags:
     description: Up to 10 named watchlists per user with live prices (story NW-06).
   - name: Portfolio
     description: Cash, positions at live prices, unrealized and realized P&L (story NW-05), equity history and risk analytics (story NW-10).
+  - name: Vault
+    description: The Vault risk-free yield, opportunity cost, deposits and withdrawals (story NW-11).
 
 components:
   securitySchemes:
@@ -63,6 +65,7 @@ components:
         - WATCHLIST_NOT_FOUND
         - WATCHLIST_ITEM_NOT_FOUND
         - WATCHLIST_LIMIT_REACHED
+        - INSUFFICIENT_VAULT_BALANCE
 
     Error:
       type: object
@@ -492,16 +495,18 @@ components:
       type: object
       description: |
         The signed-in user's portfolio. Money in SEK, 2 decimals.
-        - holdings_value = Σ positions.market_value; total_equity = cash + holdings_value;
+        - holdings_value = Σ positions.market_value; total_equity = cash + holdings_value + vault_value;
         - unrealized_pnl = Σ positions.unrealized_pnl;
-        - realized_pnl accumulates over every SELL: sell total (net proceeds) − avg_cost × quantity sold.
+        - realized_pnl accumulates over every SELL: sell total (net proceeds) − avg_cost × quantity sold;
+        - vault_value is the balance currently in The Vault (story NW-11).
         positions are sorted by market_value desc (largest holding first), then orderbook_id asc.
         top_movers is at most 5 positions sorted by day_change_percent desc, then orderbook_id asc.
         Both arrays are empty (never null) without positions.
-      required: [cash, holdings_value, total_equity, unrealized_pnl, realized_pnl, positions, top_movers]
+      required: [cash, holdings_value, vault_value, total_equity, unrealized_pnl, realized_pnl, positions, top_movers]
       properties:
         cash: { type: number }
         holdings_value: { type: number }
+        vault_value: { type: number, description: "Balance currently in the vault (story NW-11)." }
         total_equity: { type: number }
         unrealized_pnl: { type: number }
         realized_pnl: { type: number }
@@ -604,6 +609,61 @@ components:
           type: array
           items: { $ref: "#/components/schemas/AllocationSlice" }
           description: Positions by value desc (then orderbook id asc), then the cash slice, which is always present.
+
+    Vault:
+      type: object
+      description: The signed-in user's vault status and risk-free yield.
+      required: [balance, apy, interest_earned_total, projected_monthly_interest_on_idle_cash]
+      properties:
+        balance:
+          type: number
+          description: Current balance in the vault in SEK, 2 decimals.
+        apy:
+          type: number
+          description: Annual percentage yield as a fraction (e.g. 0.051).
+        interest_earned_total:
+          type: number
+          description: Total accrued interest earned in SEK, 2 decimals.
+        projected_monthly_interest_on_idle_cash:
+          type: number
+          description: Projected 30-day interest on uninvested cash (idle cash × APY × 30 / 365) in SEK, 2 decimals.
+
+    VaultTransferRequest:
+      type: object
+      required: [amount]
+      properties:
+        amount:
+          type: number
+          description: Amount in SEK, positive, at most 2 decimal places.
+
+    VaultTransaction:
+      type: object
+      required: [id, type, amount, created_at]
+      properties:
+        id:
+          type: integer
+        type:
+          type: string
+          enum: [DEPOSIT, WITHDRAWAL]
+        amount:
+          type: number
+          description: Amount in SEK, 2 decimals.
+        created_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC.
+
+    VaultTransactionListResponse:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/VaultTransaction" }
+          description: Vault transactions, newest first.
+        next_cursor:
+          type: [string, "null"]
+          description: Kept for list pagination convention; always null for now.
 
   responses:
     Unauthenticated:
@@ -1310,6 +1370,7 @@ paths:
               example:
                 cash: 98996.50
                 holdings_value: 1100.00
+                vault_value: 0
                 total_equity: 100096.50
                 unrealized_pnl: 96.50
                 realized_pnl: 0
@@ -1415,5 +1476,136 @@ paths:
                     allocation:
                       - { label: FJRD, orderbook_id: SIM-FJRD, value: 10000.00, weight: 10.00 }
                       - { label: Cash, orderbook_id: null, value: 89964.97, weight: 90.00 }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+
+  /vault:
+    get:
+      summary: The signed-in user's vault balance, APY, interest earned, and idle cash projection
+      description: |
+        Returns the user's vault status. Interest compounds daily and is accrued lazily on every read or mutation:
+        balance × (1 + APY)^(elapsed_days/365).
+      operationId: getVault
+      tags: [Vault]
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: The vault status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Vault" }
+              example:
+                balance: 20000.00
+                apy: 0.051
+                interest_earned_total: 0.00
+                projected_monthly_interest_on_idle_cash: 335.34
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+
+  /vault/deposits:
+    post:
+      summary: Deposit uninvested cash into the vault
+      description: |
+        Transfers cash from buying power into the vault. Accrues pending interest first.
+      operationId: depositVault
+      tags: [Vault]
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VaultTransferRequest" }
+            example: { amount: 20000.00 }
+      responses:
+        "201":
+          description: Deposited successfully.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VaultTransaction" }
+              example:
+                id: 1
+                type: DEPOSIT
+                amount: 20000.00
+                created_at: "2026-11-08T09:41:00Z"
+        "400":
+          description: Amount is non-positive or has more than 2 decimal places.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "amount must be positive with at most 2 decimals", code: VALIDATION_ERROR }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "422":
+          description: Amount exceeds buying power.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "insufficient buying power", code: INSUFFICIENT_FUNDS }
+
+  /vault/withdrawals:
+    post:
+      summary: Withdraw cash from the vault back to cash balance
+      description: |
+        Transfers cash from the vault back to uninvested cash. Accrues pending interest first.
+      operationId: withdrawVault
+      tags: [Vault]
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VaultTransferRequest" }
+            example: { amount: 5000.00 }
+      responses:
+        "201":
+          description: Withdrawn successfully.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VaultTransaction" }
+              example:
+                id: 2
+                type: WITHDRAWAL
+                amount: 5000.00
+                created_at: "2026-11-08T09:42:00Z"
+        "400":
+          description: Amount is non-positive or has more than 2 decimal places.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "amount must be positive with at most 2 decimals", code: VALIDATION_ERROR }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "422":
+          description: Amount exceeds vault balance.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "insufficient vault balance", code: INSUFFICIENT_VAULT_BALANCE }
+
+  /vault/transactions:
+    get:
+      summary: List the signed-in user's vault transactions
+      description: |
+        Lists the user's deposits and withdrawals newest first.
+      operationId: listVaultTransactions
+      tags: [Vault]
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: The list of vault transactions.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VaultTransactionListResponse" }
+              example:
+                items:
+                  - id: 2
+                    type: WITHDRAWAL
+                    amount: 5000.00
+                    created_at: "2026-11-08T09:42:00Z"
+                  - id: 1
+                    type: DEPOSIT
+                    amount: 20000.00
+                    created_at: "2026-11-08T09:41:00Z"
+                next_cursor: null
         "401":
           $ref: "#/components/responses/Unauthenticated"
