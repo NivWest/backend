@@ -140,8 +140,8 @@ type EquitySnapshot struct {
 type VaultAccount struct {
 	ID                  uint            `gorm:"primaryKey" json:"id"`
 	UserID              uint            `gorm:"uniqueIndex;not null;constraint:OnDelete:CASCADE;" json:"user_id"`
-	Balance             decimal.Decimal `gorm:"type:numeric(18,2);not null;default:0" json:"balance"`
-	InterestEarnedTotal decimal.Decimal `gorm:"type:numeric(18,2);not null;default:0" json:"interest_earned_total"`
+	Balance             decimal.Decimal `gorm:"type:numeric(20,8);not null;default:0" json:"balance"`
+	InterestEarnedTotal decimal.Decimal `gorm:"type:numeric(20,8);not null;default:0" json:"interest_earned_total"`
 	LastAccruedAt       time.Time       `gorm:"not null" json:"last_accrued_at"`
 	CreatedAt           time.Time       `json:"created_at"`
 	UpdatedAt           time.Time       `json:"updated_at"`

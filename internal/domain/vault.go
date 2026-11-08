@@ -3,6 +3,7 @@ package domain
 import (
 	"context"
 	"errors"
+	"math"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -69,4 +70,21 @@ type VaultRepository interface {
 	ListTransactions(ctx context.Context, userID uint) ([]models.VaultTransaction, error)
 	// GetVaultBalance returns current vault balance (accrued to now) for valuation in portfolio / snapshots.
 	GetVaultBalance(ctx context.Context, userID uint, apy float64, now time.Time) (decimal.Decimal, error)
+}
+
+// AccrueInterest computes lazy compounding interest: balance × (1 + APY)^(elapsed_days/365).
+// It returns the new balance and the accrued interest earned in the elapsed duration.
+func AccrueInterest(balance decimal.Decimal, lastAccruedAt, now time.Time, apy float64) (newBalance decimal.Decimal, accrued decimal.Decimal) {
+	if !balance.IsPositive() || now.Before(lastAccruedAt) || now.Equal(lastAccruedAt) {
+		return balance, decimal.Zero
+	}
+	elapsedSeconds := now.Sub(lastAccruedAt).Seconds()
+	if elapsedSeconds <= 0 {
+		return balance, decimal.Zero
+	}
+	elapsedDays := elapsedSeconds / 86400.0
+	growth := math.Pow(1.0+apy, elapsedDays/365.0)
+	newBalance = balance.Mul(decimal.NewFromFloat(growth))
+	accrued = newBalance.Sub(balance)
+	return newBalance, accrued
 }
