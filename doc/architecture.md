@@ -125,6 +125,15 @@ type Registrar interface {
   - `GET /portfolio/history?range=1d|1w|1m|all` (default `1d`; anything else, an empty value included, is 400 `VALIDATION_ERROR`): `1d` raw snapshots of the last 24 h, `1w`/`1m` the last snapshot per UTC hour of the last 7/30 days, `all` the last per UTC day.
   - `GET /portfolio/analytics`: `total_return_pct` from the live `total_equity` and `domain.StartingEquity` (100,000); volatility, Sharpe (`RISK_FREE_RATE`, default `0.02`) and max drawdown over the daily series once `data_points` (daily returns) ≥ 5 (`analytics.MinDailyReturns`), otherwise null with `sufficient_data: false`; `allocation` = positions (label = symbol, largest first) then `Cash`, weights in percent of total equity summing to exactly 100 (the rounding remainder goes to the largest slice). Results are rounded half-up to 2 decimals.
 
+### 3.5b. Risk-adjusted Leaderboard (story NW-13)
+- **Profile Opt-In:** `models.User` gains `display_name` (indexed via case-insensitive unique expression `lower(display_name)`), `leaderboard_opt_in` (bool), and `opted_in_at` (*time.Time). `PATCH /api/v1/me` (`UserHandler.UpdateProfile`) validates display names (3–20 characters, `^[A-Za-z0-9_-]{3,20}$`) and sets `opted_in_at` when newly opting in. Conflicts return 409 `CONFLICT`.
+- **Rankings Materialization:** Materialized atomically per metric in `leaderboard_entries` table (`LeaderboardRepository.RebuildMetric` swaps old entries for new in a single transaction).
+  - Background leader refresh job runs every `LEADERBOARD_REFRESH` (default `5m`, compose `5s`), coordinated across cluster replicas via a PostgreSQL session advisory lock (`LeaderboardLockKey = 0x4e573133`).
+  - `metric=return`: Ranks all opted-in users by `total_return_pct` descending.
+  - `metric=sharpe`: Ranks only opted-in users with `sufficient_data` (at least 5 daily returns from NW-10 snapshot analytics) by `sharpe_ratio` descending.
+  - Ties break deterministically by earlier `opted_in_at` ascending, then `user_id` ascending.
+- **Serving Leaderboards:** `GET /api/v1/leaderboard?metric=return|sharpe&limit=50` (`LeaderboardHandler.GetLeaderboard`) serves ranked entries. If authenticated and caller is opted-in but outside the top page, caller's entry is appended to the response items. Entries strictly omit PII, exposing only `rank`, `display_name`, `total_return_pct`, `sharpe_ratio`, `max_drawdown_pct`, and `is_me`.
+
 ### 3.6. Error Handling & HTTP Status Codes
 - Define domain-specific errors in `internal/domain/errors.go`.
 - Repositories translate `gorm.ErrRecordNotFound` to domain errors.

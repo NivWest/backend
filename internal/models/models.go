@@ -10,12 +10,15 @@ import (
 // Money columns are numeric(18,2) and quantities numeric(18,4), held as decimal.Decimal (story NW-04).
 
 type User struct {
-	ID       uint            `gorm:"primaryKey" json:"id"`
-	GoogleID string          `gorm:"uniqueIndex;not null" json:"google_id"`
-	Email    string          `gorm:"uniqueIndex;not null" json:"email"`
-	Name     string          `json:"name"`
-	Role     string          `gorm:"type:varchar(20);not null;default:member" json:"role"`
-	Balance  decimal.Decimal `gorm:"type:numeric(18,2);not null;default:100000.00" json:"balance"` // Simulator starting cash
+	ID               uint            `gorm:"primaryKey" json:"id"`
+	GoogleID         string          `gorm:"uniqueIndex;not null" json:"google_id"`
+	Email            string          `gorm:"uniqueIndex;not null" json:"email"`
+	Name             string          `json:"name"`
+	DisplayName      *string         `gorm:"type:varchar(20)" json:"display_name,omitempty"`
+	LeaderboardOptIn bool            `gorm:"not null;default:false" json:"leaderboard_opt_in"`
+	OptedInAt        *time.Time      `json:"opted_in_at,omitempty"`
+	Role             string          `gorm:"type:varchar(20);not null;default:member" json:"role"`
+	Balance          decimal.Decimal `gorm:"type:numeric(18,2);not null;default:100000.00" json:"balance"` // Simulator starting cash
 	// RealizedPnL accumulates sell total − avg_cost × quantity sold over every SELL (story NW-05).
 	RealizedPnL decimal.Decimal `gorm:"column:realized_pnl;type:numeric(18,2);not null;default:0" json:"realized_pnl"`
 	// ReservedCash is the sum of the reservations of the user's OPEN BUY orders (story NW-08). It is part of
@@ -170,4 +173,20 @@ type VaultTransaction struct {
 	Type      string          `gorm:"type:varchar(20);not null" json:"type"`
 	Amount    decimal.Decimal `gorm:"type:numeric(18,2);not null" json:"amount"`
 	CreatedAt time.Time       `gorm:"index:idx_vault_tx_user_created,priority:2" json:"created_at"`
+}
+
+// LeaderboardEntry represents a materialized ranking on a metric (story NW-13).
+// Metric is "return" or "sharpe". Entries are rebuilt atomically per metric.
+type LeaderboardEntry struct {
+	ID             uint             `gorm:"primaryKey" json:"id"`
+	Metric         string           `gorm:"type:varchar(20);not null;index:idx_leaderboard_metric_rank,priority:1;uniqueIndex:idx_leaderboard_metric_user,priority:1" json:"metric"`
+	UserID         uint             `gorm:"not null;index;uniqueIndex:idx_leaderboard_metric_user,priority:2;constraint:OnDelete:CASCADE;" json:"user_id"`
+	Rank           int              `gorm:"not null;index:idx_leaderboard_metric_rank,priority:2" json:"rank"`
+	DisplayName    string           `gorm:"type:varchar(20);not null" json:"display_name"`
+	TotalReturnPct decimal.Decimal  `gorm:"type:numeric(10,2);not null" json:"total_return_pct"`
+	SharpeRatio    *decimal.Decimal `gorm:"type:numeric(10,2)" json:"sharpe_ratio"`
+	MaxDrawdownPct *decimal.Decimal `gorm:"type:numeric(10,2)" json:"max_drawdown_pct"`
+	OptedInAt      time.Time        `gorm:"not null" json:"opted_in_at"`
+	CreatedAt      time.Time        `json:"created_at"`
+	UpdatedAt      time.Time        `json:"updated_at"`
 }

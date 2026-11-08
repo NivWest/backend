@@ -31,6 +31,7 @@ type App struct {
 	WatchlistHandler    *handlers.WatchlistHandler
 	AnalyticsHandler    *handlers.AnalyticsHandler
 	VaultHandler        *handlers.VaultHandler
+	LeaderboardHandler  *handlers.LeaderboardHandler
 	AuthRepo            domain.AuthRepository
 
 	// QuoteHub fans live quotes out to the streams. Close it on shutdown (cmd/api registers it with
@@ -126,6 +127,10 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	portfolioService.SetVault(vaultRepo, cfg.Vault.APY, time.Now)
 	snapshotService.SetVault(vaultRepo, cfg.Vault.APY)
 
+	leaderboardRepo := repository.NewLeaderboardRepository(db)
+	leaderboardService := services.NewLeaderboardService(leaderboardRepo, userRepo, analyticsService)
+	leaderboardHandler := handlers.NewLeaderboardHandler(leaderboardService, authRepo)
+
 	// The guest purger runs until closeApp cancels its context: once now, then every GuestPurgeInterval.
 	guestRepo := repository.NewGuestRepository(db)
 	purger := services.NewGuestPurger(guestRepo, domain.GuestRetention, time.Now)
@@ -136,10 +141,15 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	go runSnapshotScheduler(snapshotCtx, newTimeTicker(cfg.Analytics.SnapshotInterval), snapshotService)
 	log.Printf("equity snapshots every %s, risk-free rate %.4f", cfg.Analytics.SnapshotInterval, cfg.Analytics.RiskFreeRate)
 
+	leaderboardCtx, cancelLeaderboard := context.WithCancel(context.Background())
+	go runLeaderboardScheduler(leaderboardCtx, newTimeTicker(cfg.Leaderboard.RefreshInterval), leaderboardService, db)
+	log.Printf("leaderboard refresh every %s", cfg.Leaderboard.RefreshInterval)
+
 	closeApp := func() error {
 		quoteHub.Close()
 		cancelMatch()
 		<-matchDone // the engine releases its lock connection before the pool closes
+		cancelLeaderboard()
 		cancelSnapshots()
 		cancelPurge()
 		cancelWarm()
@@ -167,6 +177,7 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 		WatchlistHandler:    watchlistHandler,
 		AnalyticsHandler:    analyticsHandler,
 		VaultHandler:        vaultHandler,
+		LeaderboardHandler:  leaderboardHandler,
 		AuthRepo:            authRepo,
 	}, closeApp, nil
 }

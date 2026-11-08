@@ -12,16 +12,17 @@ import (
 )
 
 type Config struct {
-	Server    Server
-	Database  Database
-	Redis     Redis
-	Avanza    Avanza
-	Market    Market
-	RateLimit RateLimit
-	Auth      Auth
-	Matching  Matching
-	Analytics Analytics
-	Vault     Vault
+	Server      Server
+	Database    Database
+	Redis       Redis
+	Avanza      Avanza
+	Market      Market
+	RateLimit   RateLimit
+	Auth        Auth
+	Matching    Matching
+	Analytics   Analytics
+	Vault       Vault
+	Leaderboard Leaderboard
 }
 
 // Matching configures the background matching engine for LIMIT and STOP orders (story NW-08).
@@ -95,6 +96,11 @@ type Analytics struct {
 type Vault struct {
 	// APY is the annual percentage yield for the vault as a fraction (VAULT_APY, default 0.051).
 	APY float64
+}
+
+// Leaderboard configures periodic leaderboard materialization (story NW-13).
+type Leaderboard struct {
+	RefreshInterval time.Duration
 }
 
 type RateLimit struct {
@@ -227,6 +233,10 @@ func Load(envFile string) (*Config, error) {
 
 		Vault: Vault{
 			APY: getFloat("VAULT_APY", 0.051),
+		},
+
+		Leaderboard: Leaderboard{
+			RefreshInterval: getPositiveDuration("LEADERBOARD_REFRESH", 5*time.Minute),
 		},
 	}, nil
 }

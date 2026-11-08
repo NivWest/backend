@@ -1,14 +1,19 @@
 package domain
 
 import (
-	"backend/internal/models"
 	"context"
+	"time"
+
+	"backend/internal/models"
 )
 
 type UserRepository interface {
 	Create(ctx context.Context, user *models.User) error
 	UpsertGoogle(ctx context.Context, user *models.User) (*models.User, error)
 	GetByID(ctx context.Context, id uint) (*models.User, error)
+	GetByDisplayName(ctx context.Context, displayName string) (*models.User, error)
+	UpdateProfile(ctx context.Context, userID uint, displayName *string, optIn *bool, optedInAt *time.Time) (*models.User, error)
+	ListOptedInUsers(ctx context.Context) ([]models.User, error)
 	Delete(ctx context.Context, id uint) error
 }
 

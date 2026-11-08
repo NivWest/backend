@@ -89,8 +89,10 @@ func fullApp() *app.App {
 		AnalyticsHandler: handlers.NewAnalyticsHandler(services.NewAnalyticsService(&testutil.SnapshotRepo{},
 			services.NewPortfolioService(&testutil.PortfolioRepo{}, provider, users), 0.02, nil), auth),
 		VaultHandler: handlers.NewVaultHandler(services.NewVaultService(testutil.NewVaultRepo(users), users, 0.051, nil), auth),
-		SimHandler:   handlers.NewSimHandler(&testutil.SimControl{}),
-		AuthRepo:     auth,
+		LeaderboardHandler: handlers.NewLeaderboardHandler(services.NewLeaderboardService(testutil.NewLeaderboardRepo(), users,
+			services.NewAnalyticsService(&testutil.SnapshotRepo{}, services.NewPortfolioService(&testutil.PortfolioRepo{}, provider, users), 0.02, nil)), auth),
+		SimHandler: handlers.NewSimHandler(&testutil.SimControl{}),
+		AuthRepo:   auth,
 	}
 }
 

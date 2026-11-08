@@ -10,6 +10,7 @@ import (
 	"errors"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,10 +39,13 @@ type UserRepo struct {
 	mu    sync.Mutex
 	Users map[uint]*models.User
 
-	CreateFn       func(ctx context.Context, user *models.User) error
-	UpsertGoogleFn func(ctx context.Context, user *models.User) (*models.User, error)
-	GetByIDFn      func(ctx context.Context, id uint) (*models.User, error)
-	DeleteFn       func(ctx context.Context, id uint) error
+	CreateFn           func(ctx context.Context, user *models.User) error
+	UpsertGoogleFn     func(ctx context.Context, user *models.User) (*models.User, error)
+	GetByIDFn          func(ctx context.Context, id uint) (*models.User, error)
+	GetByDisplayNameFn func(ctx context.Context, displayName string) (*models.User, error)
+	UpdateProfileFn    func(ctx context.Context, userID uint, displayName *string, optIn *bool, optedInAt *time.Time) (*models.User, error)
+	ListOptedInUsersFn func(ctx context.Context) ([]models.User, error)
+	DeleteFn           func(ctx context.Context, id uint) error
 }
 
 // NewUserRepo returns a UserRepo seeded with the given users (keyed by ID).
@@ -91,6 +95,59 @@ func (r *UserRepo) GetByID(ctx context.Context, id uint) (*models.User, error) {
 		return u, nil
 	}
 	return nil, domain.ErrUserNotFound
+}
+
+func (r *UserRepo) GetByDisplayName(ctx context.Context, displayName string) (*models.User, error) {
+	if r.GetByDisplayNameFn != nil {
+		return r.GetByDisplayNameFn(ctx, displayName)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, u := range r.Users {
+		if u.DisplayName != nil && strings.EqualFold(*u.DisplayName, displayName) {
+			copy := *u
+			return &copy, nil
+		}
+	}
+	return nil, domain.ErrUserNotFound
+}
+
+func (r *UserRepo) UpdateProfile(ctx context.Context, userID uint, displayName *string, optIn *bool, optedInAt *time.Time) (*models.User, error) {
+	if r.UpdateProfileFn != nil {
+		return r.UpdateProfileFn(ctx, userID, displayName, optIn, optedInAt)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	u, ok := r.Users[userID]
+	if !ok {
+		return nil, domain.ErrUserNotFound
+	}
+	if displayName != nil {
+		u.DisplayName = displayName
+	}
+	if optIn != nil {
+		u.LeaderboardOptIn = *optIn
+	}
+	if optedInAt != nil {
+		u.OptedInAt = optedInAt
+	}
+	copy := *u
+	return &copy, nil
+}
+
+func (r *UserRepo) ListOptedInUsers(ctx context.Context) ([]models.User, error) {
+	if r.ListOptedInUsersFn != nil {
+		return r.ListOptedInUsersFn(ctx)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var list []models.User
+	for _, u := range r.Users {
+		if u.LeaderboardOptIn && u.DisplayName != nil && *u.DisplayName != "" {
+			list = append(list, *u)
+		}
+	}
+	return list, nil
 }
 
 func (r *UserRepo) Delete(ctx context.Context, id uint) error {

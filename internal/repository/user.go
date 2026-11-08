@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"time"
 
 	"backend/internal/domain"
 	"backend/internal/models"
@@ -69,6 +70,58 @@ func (r *userRepo) GetByID(ctx context.Context, id uint) (*models.User, error) {
 	}
 
 	return &user, nil
+}
+
+func (r *userRepo) GetByDisplayName(ctx context.Context, displayName string) (*models.User, error) {
+	var user models.User
+	err := r.db.WithContext(ctx).Where("lower(display_name) = lower(?)", displayName).First(&user).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, domain.ErrUserNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (r *userRepo) UpdateProfile(ctx context.Context, userID uint, displayName *string, optIn *bool, optedInAt *time.Time) (*models.User, error) {
+	var user models.User
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&user, userID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return domain.ErrUserNotFound
+			}
+			return err
+		}
+		updates := map[string]any{}
+		if displayName != nil {
+			updates["display_name"] = *displayName
+		}
+		if optIn != nil {
+			updates["leaderboard_opt_in"] = *optIn
+		}
+		if optedInAt != nil {
+			updates["opted_in_at"] = *optedInAt
+		}
+		if len(updates) > 0 {
+			if err := tx.Model(&user).Updates(updates).Error; err != nil {
+				return err
+			}
+		}
+		return tx.First(&user, userID).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (r *userRepo) ListOptedInUsers(ctx context.Context) ([]models.User, error) {
+	var users []models.User
+	err := r.db.WithContext(ctx).
+		Where("leaderboard_opt_in = ? AND display_name IS NOT NULL AND display_name != ''", true).
+		Find(&users).Error
+	return users, err
 }
 
 func (r *userRepo) Delete(ctx context.Context, id uint) error {
