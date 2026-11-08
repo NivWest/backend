@@ -31,6 +31,7 @@ type App struct {
 	WatchlistHandler *handlers.WatchlistHandler
 	AIHandler        *handlers.AIHandler
 	AnalyticsHandler *handlers.AnalyticsHandler
+	InsightsHandler  *handlers.InsightsHandler
 	AuthRepo         domain.AuthRepository
 
 	// SimHandler is nil unless MARKET_DATA_PROVIDER=simulated and MARKET_SIM_CONTROL_ENABLED=true (dev/test only).
@@ -94,6 +95,10 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	briefService := services.NewAIBriefService(gateway, provider, repository.NewAIBriefRepository(db), time.Now)
 	aiHandler := handlers.NewAIHandler(briefService, gateway, authRepo)
 
+	insightsReviewRepo := repository.NewInsightsReviewRepository(db)
+	insightsService := services.NewInsightsService(portfolioService, orderRepo, insightsReviewRepo, gateway, nil, time.Now)
+	insightsHandler := handlers.NewInsightsHandler(insightsService, authRepo)
+
 	// The guest purger runs until closeApp cancels its context: once now, then every GuestPurgeInterval.
 	guestRepo := repository.NewGuestRepository(db)
 	purger := services.NewGuestPurger(guestRepo, domain.GuestRetention, time.Now)
@@ -131,6 +136,7 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 		WatchlistHandler: watchlistHandler,
 		AIHandler:        aiHandler,
 		AnalyticsHandler: analyticsHandler,
+		InsightsHandler:  insightsHandler,
 		AuthRepo:         authRepo,
 	}, closeApp, nil
 }

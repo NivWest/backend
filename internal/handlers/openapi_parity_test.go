@@ -89,6 +89,9 @@ func fullApp() *app.App {
 			services.NewAIBriefService(gateway, provider, testutil.NewAIBriefRepo(), nil), gateway, auth),
 		AnalyticsHandler: handlers.NewAnalyticsHandler(services.NewAnalyticsService(&testutil.SnapshotRepo{},
 			services.NewPortfolioService(&testutil.PortfolioRepo{}, provider, users), 0.02, nil), auth),
+		InsightsHandler: handlers.NewInsightsHandler(services.NewInsightsService(
+			services.NewPortfolioService(&testutil.PortfolioRepo{}, provider, users),
+			&testutil.OrderRepo{}, testutil.NewInsightsReviewRepo(), gateway, nil, nil), auth),
 		SimHandler: handlers.NewSimHandler(&testutil.SimControl{}),
 		AuthRepo:   auth,
 	}
