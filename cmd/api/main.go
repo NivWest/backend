@@ -8,46 +8,6 @@ import (
 	"net/http"
 )
 
-type Registrar interface {
-	Register(v1 *gin.RouterGroup)
-}
-
-// Mount accepts a variadic list of Registrar interfaces and registers them.
-func mountHandlers(engine *gin.Engine, handlers ...Registrar) {
-	v1 := engine.Group("/api/v1")
-	for _, handler := range handlers {
-		handler.Register(v1)
-	}
-}
-
-func newHTTPServer(app *app.App) (*gin.Engine, error) {
-	engine := gin.New()
-
-	engine.Use(
-		gin.Logger(),
-		gin.Recovery(),
-	)
-
-	registrars := []Registrar{
-		app.HealthHandler,
-		app.MarketHandler,
-		app.UserHandler,
-		app.AuthHandler,
-		app.PortfolioHandler,
-		app.OrderHandler,
-		app.WatchlistHandler,
-	}
-	// SimHandler is nil unless sim control is enabled; appending a nil *SimHandler would be a
-	// non-nil Registrar whose routes still mount, so only add it when it exists.
-	if app.SimHandler != nil {
-		registrars = append(registrars, app.SimHandler)
-	}
-
-	mountHandlers(engine, registrars...)
-
-	return engine, nil
-}
-
 func main() {
 	cfg, err := config.Load(".env")
 	if err != nil {
@@ -64,10 +24,7 @@ func main() {
 		}
 	}()
 
-	engine, err := newHTTPServer(app)
-	if err != nil {
-		log.Fatal(err)
-	}
+	engine := app.Router(gin.Logger(), gin.Recovery())
 
 	server := &http.Server{
 		Addr:         cfg.Server.Host + ":" + cfg.Server.Port,

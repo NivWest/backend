@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"backend/api"
 	"backend/internal/config"
 	"backend/internal/domain"
 	"backend/internal/handlers"
@@ -19,6 +20,7 @@ import (
 
 type App struct {
 	HealthHandler    *handlers.HealthHandler
+	OpenAPIHandler   *handlers.OpenAPIHandler
 	UserHandler      *handlers.UserHandler
 	MarketHandler    *handlers.MarketHandler
 	AuthHandler      *handlers.AuthHandler
@@ -96,6 +98,7 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 			domain.Features{GuestAuth: cfg.Auth.GuestEnabled, SimControl: simHandler != nil},
 			cfg.Market.Provider,
 		),
+		OpenAPIHandler:   handlers.NewOpenAPIHandler(api.OpenAPISpec),
 		UserHandler:      userHandler,
 		MarketHandler:    marketHandler,
 		SimHandler:       simHandler,
