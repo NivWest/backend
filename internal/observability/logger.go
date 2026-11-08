@@ -145,7 +145,6 @@ func RequestLogger(logger *slog.Logger) gin.HandlerFunc {
 		}
 
 		attrs := []slog.Attr{
-			slog.String("request_id", reqID),
 			slog.String("method", c.Request.Method),
 			slog.String("route", route),
 			slog.Int("status", c.Writer.Status()),
