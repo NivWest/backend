@@ -152,3 +152,31 @@ func TestLoad_InvalidMarketProviderErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestLoad_MatchingInterval(t *testing.T) {
+	tests := []struct {
+		name, env string
+		want      time.Duration
+	}{
+		{name: "unset defaults to 1s", env: "", want: time.Second},
+		{name: "compose value", env: "1s", want: time.Second},
+		{name: "override", env: "250ms", want: 250 * time.Millisecond},
+		{name: "minimum accepted", env: "100ms", want: 100 * time.Millisecond},
+		{name: "below minimum falls back", env: "10ms", want: time.Second},
+		{name: "zero falls back", env: "0s", want: time.Second},
+		{name: "negative falls back", env: "-1s", want: time.Second},
+		{name: "garbage falls back", env: "soon", want: time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("MATCHING_INTERVAL", tt.env)
+			cfg, err := Load("")
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.Matching.Interval != tt.want {
+				t.Errorf("Matching.Interval = %v, want %v", cfg.Matching.Interval, tt.want)
+			}
+		})
+	}
+}

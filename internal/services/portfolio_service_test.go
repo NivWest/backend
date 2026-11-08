@@ -98,7 +98,7 @@ func TestPortfolioService_GetPortfolio_Values(t *testing.T) {
 			positions: []models.Position{holding("NVE", "10", "100.35")},
 			quotes:    map[string]quoteResult{"SIM-NVE": last(110, 1.25)},
 			want: domain.Portfolio{
-				Cash: 98996.50, HoldingsValue: 1100, TotalEquity: 100096.50, UnrealizedPnL: 96.50, RealizedPnL: 0,
+				Cash: 98996.50, BuyingPower: 98996.50, HoldingsValue: 1100, TotalEquity: 100096.50, UnrealizedPnL: 96.50, RealizedPnL: 0,
 				Positions: []domain.PortfolioPosition{nve}, TopMovers: []domain.PortfolioPosition{nve},
 			},
 		},
@@ -109,7 +109,7 @@ func TestPortfolioService_GetPortfolio_Values(t *testing.T) {
 			positions: []models.Position{holding("NVE", "5", "100.35")},
 			quotes:    map[string]quoteResult{"SIM-NVE": last(110, 1.25)},
 			want: domain.Portfolio{
-				Cash: 99544.58, HoldingsValue: 550, TotalEquity: 100094.58, UnrealizedPnL: 48.25, RealizedPnL: 46.33,
+				Cash: 99544.58, BuyingPower: 99544.58, HoldingsValue: 550, TotalEquity: 100094.58, UnrealizedPnL: 48.25, RealizedPnL: 46.33,
 				Positions: []domain.PortfolioPosition{nveHalf}, TopMovers: []domain.PortfolioPosition{nveHalf},
 			},
 		},
@@ -118,7 +118,7 @@ func TestPortfolioService_GetPortfolio_Values(t *testing.T) {
 			cash:     "100000",
 			realized: "0",
 			want: domain.Portfolio{
-				Cash: 100000, TotalEquity: 100000,
+				Cash: 100000, BuyingPower: 100000, TotalEquity: 100000,
 				Positions: []domain.PortfolioPosition{}, TopMovers: []domain.PortfolioPosition{},
 			},
 		},
@@ -133,7 +133,7 @@ func TestPortfolioService_GetPortfolio_Values(t *testing.T) {
 				"SIM-AAA": last(150, 2.5), "SIM-BBB": last(100, -1), "SIM-CCC": last(25, 0), "SIM-DDD": last(200, -3),
 			},
 			want: domain.Portfolio{
-				Cash: 1000, HoldingsValue: 3300, TotalEquity: 4300, UnrealizedPnL: 300, RealizedPnL: -12.34,
+				Cash: 1000, BuyingPower: 1000, HoldingsValue: 3300, TotalEquity: 4300, UnrealizedPnL: 300, RealizedPnL: -12.34,
 				Positions: []domain.PortfolioPosition{aaa, ddd, bbb, ccc},
 				TopMovers: []domain.PortfolioPosition{aaa, ccc, bbb, ddd},
 			},
@@ -150,7 +150,7 @@ func TestPortfolioService_GetPortfolio_Values(t *testing.T) {
 				"SIM-ZERO": last(0, 5),
 			},
 			want: domain.Portfolio{
-				Cash: 500, HoldingsValue: 210, TotalEquity: 710,
+				Cash: 500, BuyingPower: 500, HoldingsValue: 210, TotalEquity: 710,
 				Positions: []domain.PortfolioPosition{zeroPos, errPos, gonePos},
 				TopMovers: []domain.PortfolioPosition{errPos, gonePos, zeroPos},
 			},
@@ -166,7 +166,7 @@ func TestPortfolioService_GetPortfolio_Values(t *testing.T) {
 				p := domain.PortfolioPosition{OrderbookID: "SIM-FJRD", Symbol: "FJRD", Name: "FJRD AB", Quantity: 0.3333,
 					AvgCost: 100.10, LastPrice: 100.07, MarketValue: 33.35, UnrealizedPnL: -0.01,
 					UnrealizedPnLPercent: -0.03, DayChangePercent: 1.01, Weight: 100}
-				return domain.Portfolio{Cash: 98996.50, HoldingsValue: 33.35, TotalEquity: 99029.85, UnrealizedPnL: -0.01,
+				return domain.Portfolio{Cash: 98996.50, BuyingPower: 98996.50, HoldingsValue: 33.35, TotalEquity: 99029.85, UnrealizedPnL: -0.01,
 					Positions: []domain.PortfolioPosition{p}, TopMovers: []domain.PortfolioPosition{p}}
 			}(),
 		},
@@ -181,7 +181,7 @@ func TestPortfolioService_GetPortfolio_Values(t *testing.T) {
 				p := domain.PortfolioPosition{OrderbookID: "SIM-HALF", Symbol: "HALF", Name: "HALF AB", Quantity: 3,
 					AvgCost: 10.12, LastPrice: 10.07, MarketValue: 30.21, UnrealizedPnL: -0.16,
 					UnrealizedPnLPercent: -0.53, DayChangePercent: -0.13, Weight: 100}
-				return domain.Portfolio{Cash: 1000, HoldingsValue: 30.21, TotalEquity: 1030.21, UnrealizedPnL: -0.16,
+				return domain.Portfolio{Cash: 1000, BuyingPower: 1000, HoldingsValue: 30.21, TotalEquity: 1030.21, UnrealizedPnL: -0.16,
 					RealizedPnL: 0.01, Positions: []domain.PortfolioPosition{p}, TopMovers: []domain.PortfolioPosition{p}}
 			}(),
 		},
@@ -333,5 +333,45 @@ func TestPortfolioService_GetPortfolio_QuotesConcurrentlyByOrderbookID(t *testin
 		if p.LastPrice != 2 {
 			t.Errorf("%s LastPrice = %v, want the live quote 2", p.OrderbookID, p.LastPrice)
 		}
+	}
+}
+
+// Story NW-08: reservations of OPEN orders are part of cash, shown as reserved_cash, and held back from buying power;
+// reserved shares are reported per position.
+func TestPortfolioService_GetPortfolio_Reservations(t *testing.T) {
+	tests := []struct {
+		name                       string
+		cash, reserved             string
+		reservedQty                string
+		wantReserved, wantBuyPower float64
+		wantReservedQty            float64
+	}{
+		{name: "AC1 buy limit 10 @ 95 reserves 952.38", cash: "100000.00", reserved: "952.38", reservedQty: "0",
+			wantReserved: 952.38, wantBuyPower: 99047.62},
+		{name: "nothing reserved", cash: "500.00", reserved: "0", reservedQty: "0", wantReserved: 0, wantBuyPower: 500},
+		{name: "all cash reserved and shares held back", cash: "1000.00", reserved: "1000.00", reservedQty: "2.5",
+			wantReserved: 1000, wantBuyPower: 0, wantReservedQty: 2.5},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			users := testutil.NewUserRepo(&models.User{ID: 1, Balance: dec(tt.cash), ReservedCash: dec(tt.reserved)})
+			pos := holding("KALL", "10", "100")
+			pos.ReservedQuantity = dec(tt.reservedQty)
+			p, err := NewPortfolioService(&testutil.PortfolioRepo{Positions: []models.Position{pos}},
+				marketOf(map[string]quoteResult{"SIM-KALL": last(100, 0)}), users).GetPortfolio(context.Background(), 1)
+			if err != nil {
+				t.Fatalf("GetPortfolio() error = %v", err)
+			}
+			cash := dec(tt.cash).InexactFloat64()
+			if p.Cash != cash || p.ReservedCash != tt.wantReserved || p.BuyingPower != tt.wantBuyPower {
+				t.Errorf("cash/reserved/buying power = %v/%v/%v, want %v/%v/%v", p.Cash, p.ReservedCash, p.BuyingPower, cash, tt.wantReserved, tt.wantBuyPower)
+			}
+			if p.TotalEquity != cash+1000 {
+				t.Errorf("total_equity = %v, want cash + holdings %v (reserved cash is still cash)", p.TotalEquity, cash+1000)
+			}
+			if got := p.Positions[0].ReservedQuantity; got != tt.wantReservedQty {
+				t.Errorf("reserved_quantity = %v, want %v", got, tt.wantReservedQty)
+			}
+		})
 	}
 }
