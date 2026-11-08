@@ -227,33 +227,4 @@ func TestUserHandler(t *testing.T) {
 	})
 }
 
-// ---------------------------------------------------------------------------
-// Portfolio
-// ---------------------------------------------------------------------------
-
-func TestPortfolioHandler_Dashboard(t *testing.T) {
-	t.Run("requires auth", func(t *testing.T) {
-		svc := services.NewPortfolioService(&testutil.PortfolioRepo{}, &testutil.MarketProvider{}, testutil.NewUserRepo())
-		w := do(t, newEngine(NewPortfolioHandler(svc, newAuth())), http.MethodGet, "/api/v1/portfolio/dashboard", "", nil)
-		expectStatus(t, w, http.StatusUnauthorized)
-	})
-
-	t.Run("service error returns 500", func(t *testing.T) {
-		svc := services.NewPortfolioService(&testutil.PortfolioRepo{}, &testutil.MarketProvider{}, testutil.NewUserRepo())
-		w := do(t, newEngine(NewPortfolioHandler(svc, newAuth())), http.MethodGet, "/api/v1/portfolio/dashboard", memberSession, nil)
-		expectStatus(t, w, http.StatusInternalServerError)
-		expectErrorBody(t, w)
-	})
-
-	t.Run("returns dashboard", func(t *testing.T) {
-		users := testutil.NewUserRepo(&models.User{ID: 1, Balance: decimal.RequireFromString("1234.56")})
-		svc := services.NewPortfolioService(&testutil.PortfolioRepo{}, &testutil.MarketProvider{}, users)
-		w := do(t, newEngine(NewPortfolioHandler(svc, newAuth())), http.MethodGet, "/api/v1/portfolio/dashboard", memberSession, nil)
-		expectStatus(t, w, http.StatusOK)
-		var dash services.PortfolioDashboard
-		_ = json.Unmarshal(w.Body.Bytes(), &dash)
-		if dash.Balance != 1234.56 {
-			t.Errorf("balance = %v, want 1234.56", dash.Balance)
-		}
-	})
-}
+// Watchlist handler tests live in watchlist_handler_test.go; portfolio handler tests in portfolio_handler_test.go.

@@ -39,6 +39,10 @@ func Migrate(db *gorm.DB) error {
 		return fmt.Errorf("stocks.orderbook_id not null: %w", err)
 	}
 
+	if err := backfillAvgCost(db); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -78,6 +82,17 @@ func dedupeWatchlistItems(db *gorm.DB) error {
 		WHERE a.watchlist_id = b.watchlist_id AND a.stock_id = b.stock_id AND a.id > b.id`).Error
 	if err != nil {
 		return fmt.Errorf("dedupe watchlist items: %w", err)
+	}
+	return nil
+}
+
+// backfillAvgCost gives positions opened before NW-05 a cost basis. AutoMigrate adds positions.avg_cost
+// with default 0; the buy commission of those lots was never recorded, so it is unknown and the average
+// fill price is the best available cost basis (commission excluded). Idempotent: only rows still at 0
+// are touched, and every NW-05 BUY writes a positive avg_cost.
+func backfillAvgCost(db *gorm.DB) error {
+	if err := db.Exec(`UPDATE positions SET avg_cost = avg_price WHERE avg_cost = 0`).Error; err != nil {
+		return fmt.Errorf("backfill positions.avg_cost: %w", err)
 	}
 	return nil
 }

@@ -387,6 +387,69 @@ components:
           type: [string, "null"]
           description: Always null; a user has at most 10 lists, so the list is not paginated.
 
+    OrderPage:
+      type: object
+      description: One page of the signed-in user's orders, newest first (created_at desc, then id desc).
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Order" }
+          description: Empty array (never null) when there are no orders.
+        next_cursor:
+          type: [string, "null"]
+          description: |
+            Opaque cursor (URL-safe base64 of the last item's created_at and id). Pass it as `cursor` to get the
+            next page. null when this is the last page.
+
+    PortfolioPosition:
+      type: object
+      description: |
+        One open position, valued at the live last price. Money in SEK, rounded half-up to 2 decimals at serialization;
+        everything is computed in decimal first.
+        - avg_cost = (sum of BUY totals for the open lot, commission included) / quantity; a SELL leaves it unchanged;
+        - last_price = the quote's last price (2 decimals); when the quote fails, last_price = avg_cost and day_change_percent = 0;
+        - market_value = last_price × quantity; unrealized_pnl = market_value − avg_cost × quantity;
+        - unrealized_pnl_percent = unrealized_pnl / (avg_cost × quantity) × 100;
+        - weight = market_value / holdings_value × 100 (0 when holdings_value is 0).
+      required: [orderbook_id, symbol, name, quantity, avg_cost, last_price, market_value, unrealized_pnl, unrealized_pnl_percent, day_change_percent, weight]
+      properties:
+        orderbook_id: { type: string }
+        symbol: { type: string }
+        name: { type: string }
+        quantity: { type: number, description: Up to 4 decimals. }
+        avg_cost: { type: number, description: SEK per share incl. buy commission, 2 decimals. }
+        last_price: { type: number, description: SEK, 2 decimals. }
+        market_value: { type: number, description: SEK, 2 decimals. }
+        unrealized_pnl: { type: number, description: SEK, 2 decimals. }
+        unrealized_pnl_percent: { type: number, description: Percent, 2 decimals (9.62 means +9.62%). }
+        day_change_percent: { type: number, description: The quote's change today in percent, 2 decimals. }
+        weight: { type: number, description: Percent of holdings_value, 2 decimals. }
+
+    Portfolio:
+      type: object
+      description: |
+        The signed-in user's portfolio. Money in SEK, 2 decimals.
+        - holdings_value = Σ positions.market_value; total_equity = cash + holdings_value;
+        - unrealized_pnl = Σ positions.unrealized_pnl;
+        - realized_pnl accumulates over every SELL: sell total (net proceeds) − avg_cost × quantity sold.
+        positions are sorted by market_value desc (largest holding first), then orderbook_id asc.
+        top_movers is at most 5 positions sorted by day_change_percent desc, then orderbook_id asc.
+        Both arrays are empty (never null) without positions.
+      required: [cash, holdings_value, total_equity, unrealized_pnl, realized_pnl, positions, top_movers]
+      properties:
+        cash: { type: number }
+        holdings_value: { type: number }
+        total_equity: { type: number }
+        unrealized_pnl: { type: number }
+        realized_pnl: { type: number }
+        positions:
+          type: array
+          items: { $ref: "#/components/schemas/PortfolioPosition" }
+        top_movers:
+          type: array
+          items: { $ref: "#/components/schemas/PortfolioPosition" }
+
   responses:
     Unauthenticated:
       description: Missing, unknown or expired session.
@@ -710,6 +773,51 @@ paths:
           $ref: "#/components/responses/InstrumentNotFound"
 
   /orders:
+    get:
+      summary: List the signed-in user's orders
+      description: Newest first (created_at desc, then id desc), keyset-paginated with an opaque cursor. Other users' orders are never returned.
+      operationId: listOrders
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string, minLength: 1 }
+          description: next_cursor of the previous page.
+      responses:
+        "200":
+          description: One page of orders.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrderPage" }
+              example:
+                items:
+                  - id: 43
+                    orderbook_id: SIM-NVE
+                    symbol: NVE
+                    name: Nordvik Energy
+                    side: SELL
+                    type: MARKET
+                    status: FILLED
+                    quantity: 5
+                    fill_price: 109.89
+                    commission: 1.37
+                    total: 548.08
+                    created_at: "2026-10-26T09:42:00Z"
+                    filled_at: "2026-10-26T09:42:00Z"
+                next_cursor: eyJjIjoiMjAyNi0xMC0yNlQwOTo0MjowMFoiLCJpIjo0M30
+        "400":
+          description: limit is not an integer from 1 to 100, or cursor is malformed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: limit must be an integer from 1 to 100, code: VALIDATION_ERROR }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
     post:
       summary: Place a market order and execute it
       description: |
@@ -968,3 +1076,50 @@ paths:
               examples:
                 watchlist: { value: { error: watchlist not found, code: WATCHLIST_NOT_FOUND } }
                 item: { value: { error: instrument is not on this watchlist, code: WATCHLIST_ITEM_NOT_FOUND } }
+
+  /portfolio:
+    get:
+      summary: The signed-in user's portfolio with cost basis and P&L
+      description: |
+        Cash, open positions valued at live quotes (fetched concurrently; a failed quote falls back to avg_cost),
+        unrealized and realized P&L. Replaces the old GET /portfolio/dashboard, which is removed.
+      operationId: getPortfolio
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: The portfolio.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Portfolio" }
+              example:
+                cash: 98996.50
+                holdings_value: 1100.00
+                total_equity: 100096.50
+                unrealized_pnl: 96.50
+                realized_pnl: 0
+                positions:
+                  - orderbook_id: SIM-NVE
+                    symbol: NVE
+                    name: Nordvik Energy
+                    quantity: 10
+                    avg_cost: 100.35
+                    last_price: 110.00
+                    market_value: 1100.00
+                    unrealized_pnl: 96.50
+                    unrealized_pnl_percent: 9.62
+                    day_change_percent: 1.25
+                    weight: 100
+                top_movers:
+                  - orderbook_id: SIM-NVE
+                    symbol: NVE
+                    name: Nordvik Energy
+                    quantity: 10
+                    avg_cost: 100.35
+                    last_price: 110.00
+                    market_value: 1100.00
+                    unrealized_pnl: 96.50
+                    unrealized_pnl_percent: 9.62
+                    day_change_percent: 1.25
+                    weight: 100
+        "401":
+          $ref: "#/components/responses/Unauthenticated"

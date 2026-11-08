@@ -132,8 +132,10 @@ func (r *orderRepo) Execute(ctx context.Context, p domain.ExecuteOrderParams) (*
 			return fmt.Errorf("load stock %d: %w", p.StockID, err)
 		}
 
-		// (d) Check sufficiency and move cash and shares.
+		// (d) Check sufficiency and move cash and shares. Only a SELL realizes P&L, against the position's
+		// cost basis before the sale (avg_cost is unchanged by selling).
 		balance := user.Balance
+		userUpdates := map[string]any{}
 		switch p.Side {
 		case domain.OrderSideBuy:
 			if balance.LessThan(p.Total) {
@@ -148,6 +150,8 @@ func (r *orderRepo) Execute(ctx context.Context, p domain.ExecuteOrderParams) (*
 				return domain.ErrInsufficientShares
 			}
 			balance = balance.Add(p.Total)
+			realized := domain.RealizedPnL(p.Total, position.AvgCost, p.Quantity)
+			userUpdates["realized_pnl"] = user.RealizedPnL.Add(realized)
 			if err := applySell(tx, position, p.Quantity); err != nil {
 				return err
 			}
@@ -155,8 +159,9 @@ func (r *orderRepo) Execute(ctx context.Context, p domain.ExecuteOrderParams) (*
 			return fmt.Errorf("unsupported order side %q", p.Side)
 		}
 
-		// (e) Only the balance column changes on the user row.
-		if err := tx.Model(&user).Update("balance", balance).Error; err != nil {
+		// (e) Only the balance (and, for a SELL, realized_pnl) columns change on the user row, in one UPDATE.
+		userUpdates["balance"] = balance
+		if err := tx.Model(&user).Updates(userUpdates).Error; err != nil {
 			return fmt.Errorf("update balance: %w", err)
 		}
 
@@ -213,7 +218,8 @@ func (r *orderRepo) Execute(ctx context.Context, p domain.ExecuteOrderParams) (*
 }
 
 // applyBuy adds the bought shares to the (locked) position, creating it when missing. The new
-// average price is the quantity-weighted average of the old average and the fill price.
+// average price is the quantity-weighted average of the old average and the fill price (commission
+// excluded); the new avg_cost is domain.NextAvgCost over the order total (commission included).
 func applyBuy(tx *gorm.DB, position *models.Position, p domain.ExecuteOrderParams) error {
 	if position == nil {
 		created := models.Position{
@@ -221,6 +227,7 @@ func applyBuy(tx *gorm.DB, position *models.Position, p domain.ExecuteOrderParam
 			StockID:  p.StockID,
 			Quantity: p.Quantity,
 			AvgPrice: p.FillPrice.Round(2),
+			AvgCost:  domain.NextAvgCost(decimal.Zero, decimal.Zero, p.Quantity, p.Total),
 		}
 		if err := tx.Omit(clause.Associations).Create(&created).Error; err != nil {
 			return fmt.Errorf("create position: %w", err)
@@ -231,17 +238,19 @@ func applyBuy(tx *gorm.DB, position *models.Position, p domain.ExecuteOrderParam
 	newQty := position.Quantity.Add(p.Quantity)
 	cost := position.Quantity.Mul(position.AvgPrice).Add(p.Quantity.Mul(p.FillPrice))
 	newAvg := cost.Div(newQty).Round(2)
+	newAvgCost := domain.NextAvgCost(position.Quantity, position.AvgCost, p.Quantity, p.Total)
 	if err := tx.Model(position).Updates(map[string]any{
 		"quantity":  newQty,
 		"avg_price": newAvg,
+		"avg_cost":  newAvgCost,
 	}).Error; err != nil {
 		return fmt.Errorf("update position: %w", err)
 	}
 	return nil
 }
 
-// applySell removes the sold shares from the (locked) position; the average price is unchanged and
-// the row is deleted once nothing is held.
+// applySell removes the sold shares from the (locked) position; the average price and avg_cost are
+// unchanged and the row is deleted once nothing is held.
 func applySell(tx *gorm.DB, position *models.Position, quantity decimal.Decimal) error {
 	remaining := position.Quantity.Sub(quantity)
 	if remaining.IsZero() {
