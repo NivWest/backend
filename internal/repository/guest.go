@@ -53,9 +53,12 @@ func deleteGuestBatch(tx *gorm.DB, ids []uint) (int64, error) {
 		model any
 		where string
 	}{
+		{&models.LeaderboardEntry{}, "user_id IN ?"},
 		{&models.WatchlistItem{}, "watchlist_id IN (SELECT id FROM watchlists WHERE user_id IN ?)"},
 		{&models.Watchlist{}, "user_id IN ?"},
 		{&models.EquitySnapshot{}, "user_id IN ?"},
+		{&models.VaultTransaction{}, "user_id IN ?"},
+		{&models.VaultAccount{}, "user_id IN ?"},
 		{&models.Order{}, "user_id IN ?"},
 		{&models.Position{}, "user_id IN ?"},
 		{&models.Transaction{}, "user_id IN ?"},

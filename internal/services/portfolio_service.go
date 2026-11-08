@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/shopspring/decimal"
 
@@ -11,9 +12,12 @@ import (
 )
 
 type PortfolioService struct {
-	repo     domain.PortfolioRepository
-	provider domain.MarketDataProvider
-	userRepo domain.UserRepository
+	repo      domain.PortfolioRepository
+	provider  domain.MarketDataProvider
+	userRepo  domain.UserRepository
+	vaultRepo domain.VaultRepository
+	vaultAPY  float64
+	now       func() time.Time
 }
 
 func NewPortfolioService(
@@ -28,12 +32,26 @@ func NewPortfolioService(
 	}
 }
 
+// SetVault attaches vault repository and APY for including vault balance in the portfolio.
+func (s *PortfolioService) SetVault(vaultRepo domain.VaultRepository, apy float64, now func() time.Time) {
+	s.vaultRepo = vaultRepo
+	if apy <= 0 {
+		apy = domain.DefaultVaultAPY
+	}
+	s.vaultAPY = apy
+	if now == nil {
+		now = time.Now
+	}
+	s.now = now
+}
+
 var hundred = decimal.NewFromInt(100)
 
 // valuedPosition is a position with its live price, kept in decimal until the portfolio is serialized.
 type valuedPosition struct {
 	orderbookID, symbol, name string
 	quantity, avgCost         decimal.Decimal
+	reservedQuantity          decimal.Decimal
 	lastPrice, dayChange      decimal.Decimal
 	marketValue, unrealized   decimal.Decimal
 	unrealizedPercent         decimal.Decimal
@@ -58,13 +76,14 @@ func (s *PortfolioService) GetPortfolio(ctx context.Context, userID uint) (*doma
 	var wg sync.WaitGroup
 	for i, pos := range positions {
 		valued[i] = valuedPosition{
-			orderbookID: pos.Stock.OrderbookID,
-			symbol:      pos.Stock.Symbol,
-			name:        pos.Stock.Name,
-			quantity:    pos.Quantity,
-			avgCost:     pos.AvgCost,
-			lastPrice:   pos.AvgCost, // fallback when the quote fails or has no price
-			dayChange:   decimal.Zero,
+			orderbookID:      pos.Stock.OrderbookID,
+			symbol:           pos.Stock.Symbol,
+			name:             pos.Stock.Name,
+			quantity:         pos.Quantity,
+			reservedQuantity: pos.ReservedQuantity,
+			avgCost:          pos.AvgCost,
+			lastPrice:        pos.AvgCost, // fallback when the quote fails or has no price
+			dayChange:        decimal.Zero,
 		}
 		wg.Add(1)
 		go func(vp *valuedPosition) {
@@ -102,10 +121,24 @@ func (s *PortfolioService) GetPortfolio(ctx context.Context, userID uint) (*doma
 		return valued[i].orderbookID < valued[j].orderbookID
 	})
 
+	vaultValue := decimal.Zero
+	if s.vaultRepo != nil {
+		now := time.Now
+		if s.now != nil {
+			now = s.now
+		}
+		if v, err := s.vaultRepo.GetVaultBalance(ctx, userID, s.vaultAPY, now().UTC()); err == nil {
+			vaultValue = v
+		}
+	}
+
 	portfolio := &domain.Portfolio{
 		Cash:          domain.MoneyFloat(user.Balance),
+		ReservedCash:  domain.MoneyFloat(user.ReservedCash),
+		BuyingPower:   domain.MoneyFloat(user.Balance.Sub(user.ReservedCash)),
 		HoldingsValue: domain.MoneyFloat(holdingsValue),
-		TotalEquity:   domain.MoneyFloat(user.Balance.Add(holdingsValue)),
+		VaultValue:    domain.MoneyFloat(vaultValue),
+		TotalEquity:   domain.MoneyFloat(user.Balance.Add(holdingsValue).Add(vaultValue)),
 		UnrealizedPnL: domain.MoneyFloat(unrealizedTotal),
 		RealizedPnL:   domain.MoneyFloat(user.RealizedPnL),
 		Positions:     make([]domain.PortfolioPosition, 0, len(valued)),
@@ -127,6 +160,7 @@ func (s *PortfolioService) GetPortfolio(ctx context.Context, userID uint) (*doma
 			UnrealizedPnLPercent: domain.MoneyFloat(vp.unrealizedPercent),
 			DayChangePercent:     domain.MoneyFloat(vp.dayChange),
 			Weight:               domain.MoneyFloat(weight),
+			ReservedQuantity:     vp.reservedQuantity.Round(4).InexactFloat64(),
 		})
 	}
 

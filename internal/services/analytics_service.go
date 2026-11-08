@@ -144,6 +144,11 @@ func allocation(p *domain.Portfolio) []domain.AllocationSlice {
 	cash := decimal.NewFromFloat(p.Cash)
 	values = append(values, cash)
 	slices = append(slices, domain.AllocationSlice{Label: domain.CashLabel, Value: domain.MoneyFloat(cash)})
+	if p.VaultValue > 0 {
+		vault := decimal.NewFromFloat(p.VaultValue)
+		values = append(values, vault)
+		slices = append(slices, domain.AllocationSlice{Label: domain.VaultLabel, Value: domain.MoneyFloat(vault)})
+	}
 
 	total := decimal.Zero
 	for _, v := range values {
