@@ -77,7 +77,7 @@ func fullApp() *app.App {
 	provider := &testutil.MarketProvider{}
 	gateway := services.NewAIGateway(fake.New(), testutil.NewAIUsageRepo(), 0, time.Second, nil, nil)
 	return &app.App{
-		HealthHandler: handlers.NewHealthHandler(domain.Features{GuestAuth: true, SimControl: true}, config.MarketProviderSimulated, config.LLMProviderFake),
+		HealthHandler:  handlers.NewHealthHandler(domain.Features{GuestAuth: true, SimControl: true}, config.MarketProviderSimulated, config.LLMProviderFake),
 		OpenAPIHandler: handlers.NewOpenAPIHandler(api.OpenAPISpec),
 		UserHandler:    handlers.NewUserHandler(services.NewUserService(users), auth),
 		MarketHandler:  handlers.NewMarketHandler(services.NewMarketService(provider)),
