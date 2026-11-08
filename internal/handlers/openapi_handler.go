@@ -36,6 +36,9 @@ const docsPage = `<!doctype html>
       theme: 'default',
       darkMode: true,
       hideClientButton: true,
+      showDeveloperTools: 'never',
+      agent: { disabled: true },
+      mcp: { disabled: true },
       telemetry: false,
     })
   </script>

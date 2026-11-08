@@ -43,6 +43,9 @@ func TestOpenAPIHandler(t *testing.T) {
 				`src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@` + scalarVersion + `/dist/browser/standalone.js"`,
 				`integrity="` + scalarSRI + `"`,
 				"url: '/api/v1/openapi.yaml'",
+				// No developer toolbar, AI agent or MCP promos on a public reference.
+				"showDeveloperTools: 'never'",
+				"agent: { disabled: true }",
 			},
 			wantHeaders: map[string]string{
 				"X-Content-Type-Options": "nosniff",
