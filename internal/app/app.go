@@ -129,6 +129,7 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	log.Printf("equity snapshots every %s, risk-free rate %.4f", cfg.Analytics.SnapshotInterval, cfg.Analytics.RiskFreeRate)
 
 	closeApp := func() error {
+		quoteHub.Close()
 		cancelMatch()
 		<-matchDone // the engine releases its lock connection before the pool closes
 		cancelSnapshots()

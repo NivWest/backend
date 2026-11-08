@@ -41,9 +41,6 @@ func main() {
 	// can drain the remaining connections (story NW-09).
 	server.RegisterOnShutdown(app.QuoteHub.Close)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	// Graceful shutdown (story NW-08): on SIGINT/SIGTERM stop accepting requests, let in-flight ones finish,
 	// then closeApp stops the background workers (the matching engine releases its leader lock) and the pool.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
