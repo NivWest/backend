@@ -1,0 +1,11 @@
+{
+  "id": "msg_01FixtureRefusal",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-opus-5-5",
+  "content": [],
+  "stop_reason": "refusal",
+  "stop_details": {"type": "refusal", "category": null, "explanation": "The request was declined."},
+  "stop_sequence": null,
+  "usage": {"input_tokens": 290, "output_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+}

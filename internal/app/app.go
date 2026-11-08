@@ -11,9 +11,11 @@ import (
 	"backend/internal/config"
 	"backend/internal/domain"
 	"backend/internal/handlers"
+	"backend/internal/integrations/anthropic"
 	"backend/internal/integrations/avanza"
 	"backend/internal/integrations/database"
 	"backend/internal/integrations/simmarket"
+	"backend/internal/llm/fake"
 	"backend/internal/repository"
 	"backend/internal/services"
 )
@@ -30,6 +32,7 @@ type App struct {
 	OrderHandler        *handlers.OrderHandler
 	WatchlistHandler    *handlers.WatchlistHandler
 	AnalyticsHandler    *handlers.AnalyticsHandler
+	AIHandler           *handlers.AIHandler
 	AuthRepo            domain.AuthRepository
 
 	// QuoteHub fans live quotes out to the streams. Close it on shutdown (cmd/api registers it with
@@ -101,6 +104,12 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	watchlistService := services.NewWatchlistService(watchlistRepo, provider)
 	watchlistHandler := handlers.NewWatchlistHandler(watchlistService, authRepo)
 
+	// The LLM gateway (story NW-14): one provider, selected by LLM_PROVIDER, behind budget + usage ledger.
+	llm := newLLM(cfg)
+	gateway := services.NewAIGateway(llm, repository.NewAIUsageRepository(db), cfg.LLM.DailyTokenBudget, cfg.LLM.Timeout, cfg.LLM.Prices, time.Now)
+	briefService := services.NewAIBriefService(gateway, provider, repository.NewAIBriefRepository(db), time.Now)
+	aiHandler := handlers.NewAIHandler(briefService, gateway, authRepo)
+
 	// The guest purger runs until closeApp cancels its context: once now, then every GuestPurgeInterval.
 	guestRepo := repository.NewGuestRepository(db)
 	purger := services.NewGuestPurger(guestRepo, domain.GuestRetention, time.Now)
@@ -127,6 +136,7 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 		HealthHandler: handlers.NewHealthHandler(
 			domain.Features{GuestAuth: cfg.Auth.GuestEnabled, SimControl: simHandler != nil},
 			cfg.Market.Provider,
+			llm.Name(),
 		),
 		OpenAPIHandler:      handlers.NewOpenAPIHandler(api.OpenAPISpec),
 		UserHandler:         userHandler,
@@ -139,6 +149,7 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 		OrderHandler:        orderHandler,
 		WatchlistHandler:    watchlistHandler,
 		AnalyticsHandler:    analyticsHandler,
+		AIHandler:           aiHandler,
 		AuthRepo:            authRepo,
 	}, closeApp, nil
 }
@@ -186,4 +197,23 @@ func warmSimMarket(ctx context.Context, sim *simmarket.Market) {
 		return
 	}
 	log.Printf("simulated market warmed: %d instruments in %s", len(items), time.Since(start).Round(time.Millisecond))
+}
+
+// newLLM builds the LLM provider selected by cfg.LLM.Provider. The fake answers deterministically and is
+// dev/test only; the Anthropic adapter needs ANTHROPIC_API_KEY (without it every call fails with
+// AI_UNAVAILABLE, but the rest of the API keeps working).
+func newLLM(cfg *config.Config) domain.LLM {
+	if cfg.LLM.Provider == config.LLMProviderFake {
+		log.Printf("WARNING: DEV/TEST ONLY: LLM provider: fake (deterministic answers, no model calls)")
+		return fake.New()
+	}
+	if cfg.LLM.AnthropicAPIKey == "" {
+		log.Printf("WARNING: LLM provider anthropic without ANTHROPIC_API_KEY: AI features will answer 503 AI_UNAVAILABLE")
+	}
+	if _, ok := cfg.LLM.Prices[cfg.LLM.Model]; !ok {
+		log.Printf("WARNING: no price for LLM model %q: its usage is recorded with cost 0", cfg.LLM.Model)
+	}
+	log.Printf("LLM provider: %s (model %s, timeout %s, daily budget %d tokens per user)",
+		config.LLMProviderAnthropic, cfg.LLM.Model, cfg.LLM.Timeout, cfg.LLM.DailyTokenBudget)
+	return anthropic.New(cfg.LLM.AnthropicAPIKey, cfg.LLM.Model, cfg.LLM.AnthropicBaseURL)
 }

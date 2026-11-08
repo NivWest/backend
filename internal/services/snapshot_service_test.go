@@ -15,7 +15,7 @@ import (
 
 var snapAt = time.Date(2026, 11, 8, 9, 41, 0, 0, time.FixedZone("CET", 3600))
 
-func fixedNow() time.Time { return snapAt }
+func snapFixedNow() time.Time { return snapAt }
 
 func TestSnapshotService_TakeSnapshot(t *testing.T) {
 	tests := []struct {
@@ -61,7 +61,7 @@ func TestSnapshotService_TakeSnapshot(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := &testutil.SnapshotRepo{}
 			users := testutil.NewUserRepo(&models.User{ID: 7, Balance: dec(tt.cash)})
-			svc := NewSnapshotService(repo, &testutil.PortfolioRepo{Positions: tt.positions}, users, marketOf(tt.quotes), fixedNow)
+			svc := NewSnapshotService(repo, &testutil.PortfolioRepo{Positions: tt.positions}, users, marketOf(tt.quotes), snapFixedNow)
 
 			if err := svc.TakeSnapshot(context.Background(), 7); err != nil {
 				t.Fatalf("TakeSnapshot() error = %v", err)
@@ -95,7 +95,7 @@ func TestSnapshotService_MatchesPortfolioTotalEquity(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo := &testutil.SnapshotRepo{}
-	if err := NewSnapshotService(repo, positionsRepo, users, market, fixedNow).TakeSnapshot(context.Background(), 1); err != nil {
+	if err := NewSnapshotService(repo, positionsRepo, users, market, snapFixedNow).TakeSnapshot(context.Background(), 1); err != nil {
 		t.Fatal(err)
 	}
 	if got := domain.MoneyFloat(repo.Snapshots[0].Equity); got != p.TotalEquity {
@@ -119,7 +119,7 @@ func TestSnapshotService_TakeSnapshotErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := NewSnapshotService(tt.repo, tt.positions, tt.users, marketOf(nil), fixedNow).TakeSnapshot(context.Background(), 1)
+			err := NewSnapshotService(tt.repo, tt.positions, tt.users, marketOf(nil), snapFixedNow).TakeSnapshot(context.Background(), 1)
 			if !errors.Is(err, tt.want) {
 				t.Errorf("error = %v, want %v", err, tt.want)
 			}
@@ -136,7 +136,7 @@ func TestSnapshotService_OrderFilled(t *testing.T) {
 			sawErr = ctx.Err()
 			return &models.User{ID: id, Balance: dec("100")}, nil
 		}
-		svc := NewSnapshotService(repo, &testutil.PortfolioRepo{}, users, marketOf(nil), fixedNow)
+		svc := NewSnapshotService(repo, &testutil.PortfolioRepo{}, users, marketOf(nil), snapFixedNow)
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel() // the client hung up right after its order
@@ -151,7 +151,7 @@ func TestSnapshotService_OrderFilled(t *testing.T) {
 	})
 
 	t.Run("a failure is swallowed", func(t *testing.T) {
-		svc := NewSnapshotService(&testutil.SnapshotRepo{}, &testutil.PortfolioRepo{}, testutil.NewUserRepo(), marketOf(nil), fixedNow)
+		svc := NewSnapshotService(&testutil.SnapshotRepo{}, &testutil.PortfolioRepo{}, testutil.NewUserRepo(), marketOf(nil), snapFixedNow)
 		svc.OrderFilled(context.Background(), 99) // must not panic; the fill already happened
 	})
 }
@@ -179,7 +179,7 @@ func TestSnapshotService_SnapshotAll(t *testing.T) {
 	byUser[2] = append(byUser[2], holding("NVE", "2", "100"))
 	ids = append(ids, 404) // has orders but cannot be loaded: skipped, not fatal
 	repo := &testutil.SnapshotRepo{UsersWithOrders: ids}
-	svc := NewSnapshotService(repo, &testutil.PortfolioRepo{ByUser: byUser}, users, market, fixedNow)
+	svc := NewSnapshotService(repo, &testutil.PortfolioRepo{ByUser: byUser}, users, market, snapFixedNow)
 
 	n, err := svc.SnapshotAll(context.Background())
 	if err != nil {
@@ -212,14 +212,14 @@ func TestSnapshotService_SnapshotAllEdges(t *testing.T) {
 	dbDown := errors.New("db down")
 	t.Run("nobody has orders", func(t *testing.T) {
 		repo := &testutil.SnapshotRepo{}
-		n, err := NewSnapshotService(repo, &testutil.PortfolioRepo{}, testutil.NewUserRepo(), marketOf(nil), fixedNow).SnapshotAll(context.Background())
+		n, err := NewSnapshotService(repo, &testutil.PortfolioRepo{}, testutil.NewUserRepo(), marketOf(nil), snapFixedNow).SnapshotAll(context.Background())
 		if err != nil || n != 0 || len(repo.Batches) != 0 {
 			t.Errorf("= %d, %v, batches %v; want 0, nil, none", n, err, repo.Batches)
 		}
 	})
 	t.Run("listing users fails", func(t *testing.T) {
 		repo := &testutil.SnapshotRepo{UserIDsWithOrdersFn: func(context.Context) ([]uint, error) { return nil, dbDown }}
-		if _, err := NewSnapshotService(repo, &testutil.PortfolioRepo{}, testutil.NewUserRepo(), marketOf(nil), fixedNow).SnapshotAll(context.Background()); !errors.Is(err, dbDown) {
+		if _, err := NewSnapshotService(repo, &testutil.PortfolioRepo{}, testutil.NewUserRepo(), marketOf(nil), snapFixedNow).SnapshotAll(context.Background()); !errors.Is(err, dbDown) {
 			t.Errorf("error = %v, want %v", err, dbDown)
 		}
 	})
@@ -227,7 +227,7 @@ func TestSnapshotService_SnapshotAllEdges(t *testing.T) {
 		repo := &testutil.SnapshotRepo{UsersWithOrders: []uint{1},
 			InsertBatchFn: func(context.Context, []models.EquitySnapshot) error { return dbDown }}
 		users := testutil.NewUserRepo(&models.User{ID: 1})
-		if _, err := NewSnapshotService(repo, &testutil.PortfolioRepo{}, users, marketOf(nil), fixedNow).SnapshotAll(context.Background()); !errors.Is(err, dbDown) {
+		if _, err := NewSnapshotService(repo, &testutil.PortfolioRepo{}, users, marketOf(nil), snapFixedNow).SnapshotAll(context.Background()); !errors.Is(err, dbDown) {
 			t.Errorf("error = %v, want %v", err, dbDown)
 		}
 	})

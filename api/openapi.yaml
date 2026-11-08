@@ -33,6 +33,10 @@ tags:
     description: Up to 10 named watchlists per user with live prices (story NW-06).
   - name: Portfolio
     description: Cash, positions at live prices, unrealized and realized P&L (story NW-05), equity history and risk analytics (story NW-10).
+  - name: AI
+    description: |
+      AI features behind the LLM gateway (story NW-14): per-user daily token budget, a usage ledger and a
+      deterministic fake provider (LLM_PROVIDER=fake). AI output is educational, never financial advice.
 
 components:
   securitySchemes:
@@ -63,6 +67,9 @@ components:
         - WATCHLIST_NOT_FOUND
         - WATCHLIST_ITEM_NOT_FOUND
         - WATCHLIST_LIMIT_REACHED
+        - AI_BUDGET_EXCEEDED
+        - AI_REFUSED
+        - AI_UNAVAILABLE
 
     Error:
       type: object
@@ -118,7 +125,7 @@ components:
 
     Health:
       type: object
-      required: [status, version, features, market_data_provider]
+      required: [status, version, features, market_data_provider, llm_provider]
       properties:
         status:
           type: string
@@ -131,6 +138,12 @@ components:
           type: string
           enum: [avanza, simulated]
           description: The active market data adapter (MARKET_DATA_PROVIDER, backend default avanza).
+        llm_provider:
+          type: string
+          enum: [anthropic, fake]
+          description: |
+            The active LLM adapter behind the AI gateway (LLM_PROVIDER, backend default anthropic). `fake` answers
+            deterministically and needs no API key; dev/test only.
 
     InstrumentSummary:
       type: object
@@ -605,6 +618,117 @@ components:
           items: { $ref: "#/components/schemas/AllocationSlice" }
           description: Positions by value desc (then orderbook id asc), then the cash slice, which is always present.
 
+    AIFeature:
+      type: string
+      description: An AI feature that calls the LLM gateway. Each one has its own versioned prompt.
+      enum: [instrument_brief]
+
+    BriefMetric:
+      type: object
+      description: One number of the instrument, in plain language.
+      required: [metric, value, explanation]
+      properties:
+        metric:
+          type: string
+          examples: [P/E ratio]
+        value:
+          type: string
+          description: The value as shown to the user, already formatted.
+          examples: ["14.25"]
+        explanation:
+          type: string
+
+    Brief:
+      type: object
+      description: The model's structured answer (validated against this schema before it is stored).
+      required: [summary, what_the_numbers_say, risks, beginner_takeaway]
+      properties:
+        summary:
+          type: string
+        what_the_numbers_say:
+          type: array
+          items: { $ref: "#/components/schemas/BriefMetric" }
+        risks:
+          type: array
+          items: { type: string }
+        beginner_takeaway:
+          type: string
+
+    InstrumentBrief:
+      type: object
+      description: |
+        A plain-language AI brief of one instrument. Briefs are cached per instrument, UTC day and prompt version and
+        shared by every user: the first request of the day generates it (`cached: false`), later ones reuse it.
+      required: [orderbook_id, generated_at, model, prompt_version, cached, disclaimer, brief]
+      properties:
+        orderbook_id:
+          type: string
+          examples: [SIM-FJRD]
+        generated_at:
+          type: string
+          format: date-time
+          description: When the brief was generated (UTC).
+        model:
+          type: string
+          description: The model that wrote the brief (`fake` with LLM_PROVIDER=fake).
+          examples: [claude-opus-5-5]
+        prompt_version:
+          type: string
+          description: The prompt template version, `<feature>.v<N>`.
+          examples: [instrument_brief.v1]
+        cached:
+          type: boolean
+          description: True when the brief came from today's cache instead of a new model call.
+        disclaimer:
+          type: string
+          enum: ["AI-generated · educational, not financial advice"]
+        brief:
+          $ref: "#/components/schemas/Brief"
+
+    AIFeatureUsage:
+      type: object
+      required: [feature, calls, input_tokens, output_tokens]
+      properties:
+        feature:
+          $ref: "#/components/schemas/AIFeature"
+        calls:
+          type: integer
+          format: int64
+          description: Model calls today, failed and refused ones included. Cached answers are not calls.
+        input_tokens:
+          type: integer
+          format: int64
+          description: Uncached input tokens.
+        output_tokens:
+          type: integer
+          format: int64
+
+    AIUsage:
+      type: object
+      description: |
+        The signed-in user's LLM usage for the current UTC day. `used_tokens` counts input, output, cache-read and
+        cache-write tokens; the budget resets at 00:00 UTC. `by_feature` lists every feature, sorted by name.
+      required: [date, budget_tokens, used_tokens, remaining_tokens, by_feature]
+      properties:
+        date:
+          type: string
+          format: date
+          description: The UTC day, YYYY-MM-DD.
+        budget_tokens:
+          type: integer
+          format: int64
+          description: The daily per-user token budget (AI_DAILY_TOKEN_BUDGET, default 200000).
+        used_tokens:
+          type: integer
+          format: int64
+        remaining_tokens:
+          type: integer
+          format: int64
+          description: max(0, budget_tokens - used_tokens).
+        by_feature:
+          type: array
+          items: { $ref: "#/components/schemas/AIFeatureUsage" }
+
   responses:
     Unauthenticated:
       description: Missing, unknown or expired session.
@@ -656,6 +780,25 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
           example: { error: "name must be at most 50 characters", code: VALIDATION_ERROR }
 
+    AIBudgetExceeded:
+      description: The user's daily token budget is used up; it resets at 00:00 UTC.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: "daily AI token budget exceeded, try again tomorrow", code: AI_BUDGET_EXCEEDED }
+    AIRefused:
+      description: The model declined to answer (also after the server-side fallback).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: "the AI declined to answer this request", code: AI_REFUSED }
+    AIUnavailable:
+      description: The LLM provider failed, timed out, was cut off at max_tokens or returned an invalid answer.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: "the AI service is unavailable, please try again later", code: AI_UNAVAILABLE }
+
   parameters:
     OrderbookID:
       name: orderbook_id
@@ -683,7 +826,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Health" }
-              example: { status: ok, version: 0.0.0, market_data_provider: simulated, features: { guest_auth: true, sim_control: true } }
+              example: { status: ok, version: 0.0.0, market_data_provider: simulated, llm_provider: fake, features: { guest_auth: true, sim_control: true } }
 
   /openapi.yaml:
     get:
@@ -1483,5 +1626,72 @@ paths:
                     allocation:
                       - { label: FJRD, orderbook_id: SIM-FJRD, value: 10000.00, weight: 10.00 }
                       - { label: Cash, orderbook_id: null, value: 89964.97, weight: 90.00 }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+
+  /ai/instruments/{orderbook_id}/brief:
+    get:
+      summary: Plain-language AI brief of one instrument
+      description: |
+        Explains the instrument's numbers and risks for a beginner. Served from today's shared cache when it exists
+        (`cached: true`, no model call, no usage). Otherwise the brief is generated through the LLM gateway, which
+        checks the caller's daily token budget first and records the call in the usage ledger. Concurrent requests
+        for the same uncached brief make one model call. An unknown instrument fails before any model call.
+      operationId: getInstrumentBrief
+      tags: [AI]
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: "#/components/parameters/OrderbookID"
+      responses:
+        "200":
+          description: The brief.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InstrumentBrief" }
+              example:
+                orderbook_id: SIM-FJRD
+                generated_at: "2026-11-08T09:30:00Z"
+                model: fake
+                prompt_version: instrument_brief.v1
+                cached: false
+                disclaimer: "AI-generated · educational, not financial advice"
+                brief:
+                  summary: "FAKE: Fjord Robotics (FJRD) trades at 100.00 SEK."
+                  what_the_numbers_say:
+                    - { metric: Last price, value: "100.00 SEK", explanation: "FAKE: the price of one FJRD share." }
+                  risks: ["FAKE: Industrials companies move with the business cycle."]
+                  beginner_takeaway: "FAKE: learn what Fjord Robotics does before you trade FJRD."
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/InstrumentNotFound"
+        "422":
+          $ref: "#/components/responses/AIRefused"
+        "429":
+          $ref: "#/components/responses/AIBudgetExceeded"
+        "502":
+          $ref: "#/components/responses/MarketDataUnavailable"
+        "503":
+          $ref: "#/components/responses/AIUnavailable"
+
+  /ai/usage:
+    get:
+      summary: The signed-in user's LLM usage and budget today
+      operationId: getAIUsage
+      tags: [AI]
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: Today's usage (UTC).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AIUsage" }
+              example:
+                date: "2026-11-08"
+                budget_tokens: 200000
+                used_tokens: 412
+                remaining_tokens: 199588
+                by_feature:
+                  - { feature: instrument_brief, calls: 1, input_tokens: 350, output_tokens: 62 }
         "401":
           $ref: "#/components/responses/Unauthenticated"

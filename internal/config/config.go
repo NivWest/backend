@@ -20,6 +20,7 @@ type Config struct {
 	RateLimit RateLimit
 	Auth      Auth
 	Analytics Analytics
+	LLM       LLM
 }
 
 type Server struct {
@@ -77,6 +78,52 @@ type Analytics struct {
 	RiskFreeRate float64
 }
 
+// LLM providers selectable via LLM_PROVIDER (story NW-14).
+const (
+	LLMProviderAnthropic = "anthropic"
+	LLMProviderFake      = "fake"
+)
+
+// DefaultLLMModel is the model when LLM_MODEL is unset.
+const DefaultLLMModel = "claude-opus-5-5"
+
+// LLM configures the AI gateway and its provider (story NW-14, docs: platform docs/ai.md).
+type LLM struct {
+	// Provider is "anthropic" (default) or "fake" (deterministic, dev/test only).
+	Provider string
+	// Model is the Claude model every feature uses (LLM_MODEL).
+	Model string
+	// Timeout bounds one model call, retries included (LLM_TIMEOUT).
+	Timeout time.Duration
+	// DailyTokenBudget is the per-user token budget per UTC day (AI_DAILY_TOKEN_BUDGET).
+	DailyTokenBudget int64
+	// AnthropicAPIKey is ANTHROPIC_API_KEY; never logged. AnthropicBaseURL overrides the API URL (tests, proxies).
+	AnthropicAPIKey  string
+	AnthropicBaseURL string
+	// Prices is the per-model price table used for the ledger's cost estimate.
+	Prices map[string]ModelPrice
+}
+
+// ModelPrice is a model's list price in USD per million tokens.
+type ModelPrice struct {
+	InputPerMTok      float64
+	OutputPerMTok     float64
+	CacheReadPerMTok  float64
+	CacheWritePerMTok float64
+}
+
+// DefaultModelPrices is the price table for the ledger's cost estimate: Anthropic list prices in USD per
+// million tokens (cache writes at the 5-minute rate, 1.25x input). Update it when prices change; a model
+// missing here is recorded with cost 0 and a startup warning. The fake provider is free.
+func DefaultModelPrices() map[string]ModelPrice {
+	return map[string]ModelPrice{
+		"claude-opus-5-5": {InputPerMTok: 4, OutputPerMTok: 20, CacheReadPerMTok: 0.20, CacheWritePerMTok: 5},
+		"claude-opus-5":   {InputPerMTok: 5, OutputPerMTok: 25, CacheReadPerMTok: 0.50, CacheWritePerMTok: 6.25},
+		"claude-opus-4-8": {InputPerMTok: 5, OutputPerMTok: 25, CacheReadPerMTok: 0.50, CacheWritePerMTok: 6.25},
+		"fake":            {},
+	}
+}
+
 type RateLimit struct {
 	RequestsPerSecond int
 	Burst             int
@@ -107,6 +154,11 @@ func Load(envFile string) (*Config, error) {
 		"MARKET_DATA_PROVIDER",
 		MarketProviderAvanza,
 	)
+	if err != nil {
+		return nil, err
+	}
+
+	llmProvider, err := getChoice("LLM_PROVIDER", LLMProviderAnthropic, LLMProviderAnthropic, LLMProviderFake)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +252,41 @@ func Load(envFile string) (*Config, error) {
 			SnapshotInterval: getPositiveDuration("SNAPSHOT_INTERVAL", time.Hour),
 			RiskFreeRate:     getFloat("RISK_FREE_RATE", 0.02),
 		},
+
+		LLM: LLM{
+			Provider:         llmProvider,
+			Model:            getNonBlank("LLM_MODEL", DefaultLLMModel),
+			Timeout:          getDuration("LLM_TIMEOUT", 60*time.Second),
+			DailyTokenBudget: int64(getInt("AI_DAILY_TOKEN_BUDGET", 200000)),
+			AnthropicAPIKey:  getEnv("ANTHROPIC_API_KEY", ""),
+			AnthropicBaseURL: strings.TrimSpace(getEnv("ANTHROPIC_BASE_URL", "")),
+			Prices:           DefaultModelPrices(),
+		},
 	}, nil
+}
+
+// getNonBlank is getEnv, but a value that is blank after trimming also yields defaultValue
+// (compose passes unset variables as empty strings).
+func getNonBlank(key, defaultValue string) string {
+	if value := strings.TrimSpace(getEnv(key, "")); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
+// getChoice returns the lower-cased, trimmed value of key, defaultValue when it is unset or blank, or an
+// error when it is not one of allowed.
+func getChoice(key, defaultValue string, allowed ...string) (string, error) {
+	value := strings.ToLower(strings.TrimSpace(getEnv(key, "")))
+	if value == "" {
+		return defaultValue, nil
+	}
+	for _, a := range allowed {
+		if value == a {
+			return value, nil
+		}
+	}
+	return "", fmt.Errorf("invalid %s %q: allowed values are %q", key, value, allowed)
 }
 
 func getEnv(key, defaultValue string) string {
