@@ -151,6 +151,28 @@ type Registrar interface {
 - `make api-lint` runs Redocly (`redocly.yaml`, recommended rules) on the spec. It needs network for `npx`, so it runs in CI (job `api-contract`), not in the offline fast checks.
 - Changing the API: edit `api/openapi.yaml` first (new path, schemas, error codes in `ErrorCode`), then the code; public operations say `security: []`. The frontend vendors the file and regenerates its types (`npm run api:sync && npm run api:gen`).
 
+### 3.10. Limit & Stop Orders & Background Matching Engine (story NW-08)
+- **Pending Orders:** In addition to immediate `MARKET` orders, users can place `LIMIT` orders (`limit_price`) and `STOP` orders (`stop_price`). Both start in status `OPEN`.
+- **Reservations at placement:**
+  - `BUY LIMIT` reserves `quantity × limit_price + commission(quantity × limit_price)` in `users.reserved_cash`.
+  - `BUY STOP` reserves `quantity × (stop_price × 1.05) + commission(quantity × stop_price × 1.05)` in `users.reserved_cash`.
+  - `SELL LIMIT` and `SELL STOP` reserve `quantity` shares in `positions.reserved_quantity`.
+  - Available buying power is `balance − reserved_cash`; available shares are `quantity − reserved_quantity`.
+- **Single Active Engine Replica (Advisory Lock Leader Election):**
+  - A background ticker loop (`services.MatchingEngine`) runs every `MATCHING_INTERVAL` (configured via `MATCHING_INTERVAL`, default 1s).
+  - Leader election is implemented via a PostgreSQL session advisory lock (`pg_try_advisory_lock(0x4E570008)`) over a dedicated `*sql.Conn` (`internal/repository/leader_lock.go`).
+  - Only the lock holder executes matching cycles; non-leaders retry lock acquisition on subsequent ticks.
+  - On shutdown or context cancellation, the lock connection is explicitly closed and released (`pg_advisory_unlock`), allowing failover.
+- **Cycle Execution & Concurrency:**
+  - Each cycle reads all `OPEN` orders via the partial index `idx_orders_open`, groups them by instrument, and quotes each instrument concurrently using a bounded worker pool (`DefaultMatchingWorkers = 8`).
+  - Trigger evaluation:
+    - `BUY LIMIT`: `ask ≤ limit_price`, fills at `ask`.
+    - `SELL LIMIT`: `bid ≥ limit_price`, fills at `bid`.
+    - `SELL STOP`: `bid ≤ stop_price`, fills at `bid`.
+    - `BUY STOP`: `ask ≥ stop_price`, fills at `ask`.
+  - Every fill or cancellation executes inside its own database transaction with strict row locking order (`user` → `position` → `order` `FOR UPDATE`) and re-checks that the order remains `OPEN`. Fills racing cancellations serialize safely; whichever commits first wins, and the second sees `ErrOrderNotOpen`.
+  - Order reservations are released as part of fill or rejection. If funds or shares are insufficient at fill time, the order transitions to `REJECTED` with a descriptive `reject_reason` and the reservation is freed.
+
 ---
 
 ## 4. Security & API Hygiene
