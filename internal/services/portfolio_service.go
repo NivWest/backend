@@ -51,6 +51,7 @@ var hundred = decimal.NewFromInt(100)
 type valuedPosition struct {
 	orderbookID, symbol, name string
 	quantity, avgCost         decimal.Decimal
+	reservedQuantity          decimal.Decimal
 	lastPrice, dayChange      decimal.Decimal
 	marketValue, unrealized   decimal.Decimal
 	unrealizedPercent         decimal.Decimal
@@ -75,13 +76,14 @@ func (s *PortfolioService) GetPortfolio(ctx context.Context, userID uint) (*doma
 	var wg sync.WaitGroup
 	for i, pos := range positions {
 		valued[i] = valuedPosition{
-			orderbookID: pos.Stock.OrderbookID,
-			symbol:      pos.Stock.Symbol,
-			name:        pos.Stock.Name,
-			quantity:    pos.Quantity,
-			avgCost:     pos.AvgCost,
-			lastPrice:   pos.AvgCost, // fallback when the quote fails or has no price
-			dayChange:   decimal.Zero,
+			orderbookID:      pos.Stock.OrderbookID,
+			symbol:           pos.Stock.Symbol,
+			name:             pos.Stock.Name,
+			quantity:         pos.Quantity,
+			reservedQuantity: pos.ReservedQuantity,
+			avgCost:          pos.AvgCost,
+			lastPrice:        pos.AvgCost, // fallback when the quote fails or has no price
+			dayChange:        decimal.Zero,
 		}
 		wg.Add(1)
 		go func(vp *valuedPosition) {
@@ -132,6 +134,8 @@ func (s *PortfolioService) GetPortfolio(ctx context.Context, userID uint) (*doma
 
 	portfolio := &domain.Portfolio{
 		Cash:          domain.MoneyFloat(user.Balance),
+		ReservedCash:  domain.MoneyFloat(user.ReservedCash),
+		BuyingPower:   domain.MoneyFloat(user.Balance.Sub(user.ReservedCash)),
 		HoldingsValue: domain.MoneyFloat(holdingsValue),
 		VaultValue:    domain.MoneyFloat(vaultValue),
 		TotalEquity:   domain.MoneyFloat(user.Balance.Add(holdingsValue).Add(vaultValue)),
@@ -156,6 +160,7 @@ func (s *PortfolioService) GetPortfolio(ctx context.Context, userID uint) (*doma
 			UnrealizedPnLPercent: domain.MoneyFloat(vp.unrealizedPercent),
 			DayChangePercent:     domain.MoneyFloat(vp.dayChange),
 			Weight:               domain.MoneyFloat(weight),
+			ReservedQuantity:     vp.reservedQuantity.Round(4).InexactFloat64(),
 		})
 	}
 

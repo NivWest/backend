@@ -39,6 +39,7 @@ func (a *App) registrars() []Registrar {
 	add(a.HealthHandler == nil, a.HealthHandler)
 	add(a.OpenAPIHandler == nil, a.OpenAPIHandler)
 	add(a.MarketHandler == nil, a.MarketHandler)
+	add(a.MarketStreamHandler == nil, a.MarketStreamHandler)
 	add(a.UserHandler == nil, a.UserHandler)
 	add(a.AuthHandler == nil, a.AuthHandler)
 	add(a.PortfolioHandler == nil, a.PortfolioHandler)

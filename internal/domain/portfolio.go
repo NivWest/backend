@@ -42,13 +42,18 @@ type PortfolioPosition struct {
 	UnrealizedPnLPercent float64 `json:"unrealized_pnl_percent"`
 	DayChangePercent     float64 `json:"day_change_percent"`
 	Weight               float64 `json:"weight"`
+	// ReservedQuantity is held back by OPEN SELL orders (story NW-08).
+	ReservedQuantity float64 `json:"reserved_quantity"`
 }
 
 // Portfolio is the body of GET /portfolio (#/components/schemas/Portfolio). Positions are sorted by
 // market value desc (then orderbook id asc); TopMovers holds at most MaxTopMovers positions sorted by
 // day change desc (then orderbook id asc). Both slices are never nil.
 type Portfolio struct {
-	Cash          float64             `json:"cash"`
+	Cash float64 `json:"cash"`
+	// ReservedCash is held back by OPEN BUY orders and BuyingPower = Cash − ReservedCash (story NW-08).
+	ReservedCash  float64             `json:"reserved_cash"`
+	BuyingPower   float64             `json:"buying_power"`
 	HoldingsValue float64             `json:"holdings_value"`
 	VaultValue    float64             `json:"vault_value"`
 	TotalEquity   float64             `json:"total_equity"`

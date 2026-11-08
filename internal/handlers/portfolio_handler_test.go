@@ -32,9 +32,9 @@ func sortedKeys(obj map[string]any) []string {
 }
 
 func TestPortfolioHandler_GetPortfolio(t *testing.T) {
-	portfolioKeys := []string{"cash", "holdings_value", "positions", "realized_pnl", "top_movers", "total_equity", "unrealized_pnl", "vault_value"}
+	portfolioKeys := []string{"buying_power", "cash", "holdings_value", "positions", "realized_pnl", "reserved_cash", "top_movers", "total_equity", "unrealized_pnl", "vault_value"}
 	positionKeys := []string{"avg_cost", "day_change_percent", "last_price", "market_value", "name", "orderbook_id",
-		"quantity", "symbol", "unrealized_pnl", "unrealized_pnl_percent", "weight"}
+		"quantity", "reserved_quantity", "symbol", "unrealized_pnl", "unrealized_pnl_percent", "weight"}
 
 	t.Run("requires a session", func(t *testing.T) {
 		users := testutil.NewUserRepo(&models.User{ID: 1})
