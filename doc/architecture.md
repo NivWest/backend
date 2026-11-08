@@ -170,6 +170,15 @@ type Registrar interface {
 - `make api-lint` runs Redocly (`redocly.yaml`, recommended rules) on the spec. It needs network for `npx`, so it runs in CI (job `api-contract`), not in the offline fast checks.
 - Changing the API: edit `api/openapi.yaml` first (new path, schemas, error codes in `ErrorCode`), then the code; public operations say `security: []`. The frontend vendors the file and regenerates its types (`npm run api:sync && npm run api:gen`).
 
+### 3.11. Observability: Structured Logs, Metrics, Tracing (story NW-19)
+- **Structured logging:** `log/slog` JSON/Text handler (`LOG_LEVEL=debug|info|warn|error`, `LOG_FORMAT=json|text`).
+  - Middleware generates or propagates `X-Request-ID`, writes one access line per request with `time, level, msg, request_id, method, route, status, duration_ms`.
+  - Redaction: sensitive values (e.g. `session_id` cookies, Authorization header tokens) are redacted from all log attributes.
+- **Prometheus metrics:** `GET /metrics` on the API port outside `/api/v1` (`internal/observability/metrics.go`):
+  - HTTP metrics: `http_request_duration_seconds_bucket{route, method, status}` (route is the template, bounded cardinality), `http_requests_in_flight`, standard Go metrics (`go_goroutines`).
+  - Domain metrics: `orders_filled_total{side, type}`, `llm_requests_total{feature, provider, status}`, `llm_tokens_total{feature, model, kind}`, `matching_engine_cycle_seconds`, `quote_hub_subscribers`, etc. Services instrument through interfaces without importing Prometheus directly.
+- **OpenTelemetry tracing:** Optional tracer provider configured when `OTEL_EXPORTER_OTLP_ENDPOINT` is non-empty.
+
 ---
 
 ## 4. Security & API Hygiene
