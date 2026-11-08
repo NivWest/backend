@@ -184,3 +184,33 @@ func TestLoad_MarketStream(t *testing.T) {
 		})
 	}
 }
+
+func TestLoad_Analytics(t *testing.T) {
+	tests := []struct {
+		name         string
+		interval     string
+		riskFree     string
+		wantInterval time.Duration
+		wantRiskFree float64
+	}{
+		{"defaults", "", "", time.Hour, 0.02},
+		{"overrides", "15m", "0.035", 15 * time.Minute, 0.035},
+		{"zero rate is allowed", "1h", "0", time.Hour, 0},
+		{"invalid values fall back", "often", "two percent", time.Hour, 0.02},
+		{"non-positive interval falls back", "-5m", "NaN", time.Hour, 0.02},
+		{"zero interval falls back", "0s", "+Inf", time.Hour, 0.02},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("SNAPSHOT_INTERVAL", tt.interval)
+			t.Setenv("RISK_FREE_RATE", tt.riskFree)
+			cfg, err := Load("")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Analytics.SnapshotInterval != tt.wantInterval || cfg.Analytics.RiskFreeRate != tt.wantRiskFree {
+				t.Errorf("Analytics = %+v, want %v / %v", cfg.Analytics, tt.wantInterval, tt.wantRiskFree)
+			}
+		})
+	}
+}
