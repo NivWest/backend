@@ -84,23 +84,23 @@ type Transaction struct {
 // that moves the cash and the position. IdempotencyKey is unique per user (NULL when the
 // request had no Idempotency-Key header), so concurrent retries collapse into one row.
 type Order struct {
-	ID             uint            `gorm:"primaryKey;index:idx_orders_user_created_id,priority:3" json:"id"`
-	UserID         uint            `gorm:"not null;index;uniqueIndex:idx_orders_user_idempotency_key,priority:1;index:idx_orders_user_created_id,priority:1;constraint:OnDelete:CASCADE;" json:"user_id"`
-	StockID        uint            `gorm:"not null;index;constraint:OnDelete:CASCADE;" json:"stock_id"`
-	Stock          Stock           `json:"stock,omitempty"`
-	Side           string          `gorm:"type:varchar(4);not null" json:"side"`
-	Type           string          `gorm:"type:varchar(10);not null;default:MARKET" json:"type"`
-	Status         string          `gorm:"type:varchar(10);not null" json:"status"`
-	Quantity       decimal.Decimal `gorm:"type:numeric(18,4);not null" json:"quantity"`
-	FillPrice      decimal.Decimal `gorm:"type:numeric(18,2);not null" json:"fill_price"`
+	ID             uint             `gorm:"primaryKey;index:idx_orders_user_created_id,priority:3" json:"id"`
+	UserID         uint             `gorm:"not null;index;uniqueIndex:idx_orders_user_idempotency_key,priority:1;index:idx_orders_user_created_id,priority:1;constraint:OnDelete:CASCADE;" json:"user_id"`
+	StockID        uint             `gorm:"not null;index;constraint:OnDelete:CASCADE;" json:"stock_id"`
+	Stock          Stock            `json:"stock,omitempty"`
+	Side           string           `gorm:"type:varchar(4);not null" json:"side"`
+	Type           string           `gorm:"type:varchar(10);not null;default:MARKET" json:"type"`
+	Status         string           `gorm:"type:varchar(10);not null" json:"status"`
+	Quantity       decimal.Decimal  `gorm:"type:numeric(18,4);not null" json:"quantity"`
+	FillPrice      decimal.Decimal  `gorm:"type:numeric(18,2);not null" json:"fill_price"`
 	Commission     decimal.Decimal  `gorm:"type:numeric(18,2);not null" json:"commission"`
 	Total          decimal.Decimal  `gorm:"type:numeric(18,2);not null" json:"total"`
 	Note           string           `gorm:"type:varchar(500);not null;default:''" json:"note"`
 	RealizedPnL    *decimal.Decimal `gorm:"column:realized_pnl;type:numeric(18,2)" json:"realized_pnl,omitempty"`
 	IdempotencyKey *string          `gorm:"size:255;uniqueIndex:idx_orders_user_idempotency_key,priority:2" json:"-"`
-	CreatedAt      time.Time       `gorm:"index:idx_orders_user_created_id,priority:2" json:"created_at"` // Order history keyset (NW-05)
-	UpdatedAt      time.Time       `json:"updated_at"`
-	FilledAt       *time.Time      `json:"filled_at"`
+	CreatedAt      time.Time        `gorm:"index:idx_orders_user_created_id,priority:2" json:"created_at"` // Order history keyset (NW-05)
+	UpdatedAt      time.Time        `json:"updated_at"`
+	FilledAt       *time.Time       `json:"filled_at"`
 }
 
 // Watchlist is a named list of stocks owned by one user (at most domain.MaxWatchlists per user). Names are
