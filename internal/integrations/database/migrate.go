@@ -28,6 +28,8 @@ func Migrate(db *gorm.DB) error {
 		&models.Watchlist{},
 		&models.WatchlistItem{},
 		&models.EquitySnapshot{},
+		&models.VaultAccount{},
+		&models.VaultTransaction{},
 		&models.LeaderboardEntry{},
 	); err != nil {
 		return fmt.Errorf("auto migrate: %w", err)
@@ -48,6 +50,12 @@ func Migrate(db *gorm.DB) error {
 
 	if err := backfillAvgCost(db); err != nil {
 		return err
+	}
+
+	// The matching engine (story NW-08) reads every OPEN order each cycle; a partial index keeps that scan
+	// proportional to the open orders, not to the whole order log.
+	if err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_open ON orders (stock_id, id) WHERE status = 'OPEN'`).Error; err != nil {
+		return fmt.Errorf("orders open index: %w", err)
 	}
 
 	return nil

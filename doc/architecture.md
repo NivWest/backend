@@ -158,8 +158,18 @@ type Registrar interface {
   - `internal/integrations/avanza` (`avanza.NewMarketProvider`): the Avanza public web API (`AVANZA_BASE_URL`, `AVANZA_TIMEOUT`).
   - `internal/integrations/simmarket` (`simmarket.New`): twelve fictional `SIM-*` instruments on a seeded, deterministic price path. No network. It also implements `domain.MarketSimControl` (pin/clear a price).
 - `internal/app` picks the adapter from `MARKET_DATA_PROVIDER` (`avanza` by default, or `simulated`) and builds **one** instance, shared by `services.MarketService` and the handlers. The simulated market caches its daily aggregates per instance and is warmed in a background goroutine at startup. The active provider is logged at startup and reported as `market_data_provider` by `GET /health`.
-- `handlers.MarketHandler` serves the public `/market/instruments…` routes (no session, rate-limited).
+- `handlers.MarketHandler` serves the public `/market/instruments…` routes (no session, rate-limited); `handlers.MarketStreamHandler` serves `/market/stream` (3.8a).
 - **Dev/test only:** `handlers.SimHandler` (`PUT`/`DELETE /sim/instruments/{orderbook_id}/price`) is mounted only when `MARKET_DATA_PROVIDER=simulated` **and** `MARKET_SIM_CONTROL_ENABLED=true`; `GET /health` then reports `features.sim_control: true`. It has no auth and no rate limit, and must never be enabled in production. With the Avanza provider the flag is ignored (with a startup warning).
+
+### 3.8a. Live Quotes over Server-Sent Events (story NW-09)
+- `GET /market/stream?ids=A,B` (`handlers.MarketStreamHandler`, public) streams `text/event-stream`: `retry: 3000`, then `event: quote` with a `Quote` JSON per id at once, then a `quote` whenever an instrument's last/bid/ask/change_percent changes, `: ping` every `MARKET_STREAM_HEARTBEAT` (10s), and `event: error` (an `Error` body) just before the server ends the stream (shutdown).
+- Everything that can fail does so **before** the first byte, as normal JSON: `services.ParseStreamIDs` (trimmed, blanks ignored, duplicates once, 1–50 entries → else 400 `VALIDATION_ERROR`), then `QuoteHub.Subscribe` resolves new ids (unknown → 404 `INSTRUMENT_NOT_FOUND`, upstream down → 502).
+- `domain.QuoteHub` is implemented by `services.QuoteHub` (`internal/services/quote_hub.go`): subscriptions are refcounted per instrument; one poller goroutine per watched instrument polls `MarketDataProvider.Quote` every `MARKET_STREAM_INTERVAL` (2s; compose 1s) and stops with its last subscriber, so N streams on one instrument cost one upstream poll. Upstream calls never run under the hub lock. Each subscriber has a buffer with one slot per instrument; a slow reader drops older quotes of an instrument and keeps the latest of each, and never blocks a poller. A failed poll keeps the last quote (logged once per failure streak). `Close` ends every subscription.
+- Write timeout: `SERVER_WRITE_TIMEOUT` stays 10s for every route; the stream moves the connection's write deadline forward before each write (`http.NewResponseController(w).SetWriteDeadline`) and flushes after it. Headers: `Cache-Control: no-cache, no-transform` (keeps the Next.js proxy from compressing/buffering) and `X-Accel-Buffering: no`.
+- Limits: connecting costs one token of the shared `/market` `RateLimit`; `middleware.ConcurrentLimit(MARKET_STREAM_MAX_PER_IP)` (5) caps open streams per client IP (429 `RATE_LIMITED`).
+- Disconnects are seen through the request context (the subscription ends with it). `cmd/api` handles SIGINT/SIGTERM with `http.Server.Shutdown`, having registered `QuoteHub.Close` with `RegisterOnShutdown`, so open streams end and the server drains.
+- Single instance only: the hub is in memory. Several API instances would each poll; a Redis pub/sub fan-out is future work.
+- Tests: `quote_hub_test.go` (manual tickers `testutil.ManualTickers`, `testutil.QuoteBoard`), `market_stream_handler_test.go` (a real `httptest.Server` with a 300ms `WriteTimeout`), `middleware/concurrency_test.go`.
 
 ### 3.9. API Contract (story NW-07)
 - `api/openapi.yaml` (OpenAPI 3.1, `info.title: TradeEdu API`) is the enforced source of truth. The `backend/api` package embeds it with `go:embed` (`api.OpenAPISpec`); `handlers.OpenAPIHandler` serves it at `GET /api/v1/openapi.yaml` (`application/yaml`) and renders it at `GET /api/docs` with a pinned Scalar build (`scalarVersion` + SRI hash in `openapi_handler.go`, strict CSP). Both are public.
@@ -169,6 +179,28 @@ type Registrar interface {
   - `api/spec_test.go`: the spec parses as OpenAPI 3.1 and `info.version` equals `VERSION` (bump both on a release).
 - `make api-lint` runs Redocly (`redocly.yaml`, recommended rules) on the spec. It needs network for `npx`, so it runs in CI (job `api-contract`), not in the offline fast checks.
 - Changing the API: edit `api/openapi.yaml` first (new path, schemas, error codes in `ErrorCode`), then the code; public operations say `security: []`. The frontend vendors the file and regenerates its types (`npm run api:sync && npm run api:gen`).
+
+### 3.10. Limit & Stop Orders & Background Matching Engine (story NW-08)
+- **Pending Orders:** In addition to immediate `MARKET` orders, users can place `LIMIT` orders (`limit_price`) and `STOP` orders (`stop_price`). Both start in status `OPEN`.
+- **Reservations at placement:**
+  - `BUY LIMIT` reserves `quantity × limit_price + commission(quantity × limit_price)` in `users.reserved_cash`.
+  - `BUY STOP` reserves `quantity × (stop_price × 1.05) + commission(quantity × stop_price × 1.05)` in `users.reserved_cash`.
+  - `SELL LIMIT` and `SELL STOP` reserve `quantity` shares in `positions.reserved_quantity`.
+  - Available buying power is `balance − reserved_cash`; available shares are `quantity − reserved_quantity`.
+- **Single Active Engine Replica (Advisory Lock Leader Election):**
+  - A background ticker loop (`services.MatchingEngine`) runs every `MATCHING_INTERVAL` (configured via `MATCHING_INTERVAL`, default 1s).
+  - Leader election is implemented via a PostgreSQL session advisory lock (`pg_try_advisory_lock(0x4E570008)`) over a dedicated `*sql.Conn` (`internal/repository/leader_lock.go`).
+  - Only the lock holder executes matching cycles; non-leaders retry lock acquisition on subsequent ticks.
+  - On shutdown or context cancellation, the lock connection is explicitly closed and released (`pg_advisory_unlock`), allowing failover.
+- **Cycle Execution & Concurrency:**
+  - Each cycle reads all `OPEN` orders via the partial index `idx_orders_open`, groups them by instrument, and quotes each instrument concurrently using a bounded worker pool (`DefaultMatchingWorkers = 8`).
+  - Trigger evaluation:
+    - `BUY LIMIT`: `ask ≤ limit_price`, fills at `ask`.
+    - `SELL LIMIT`: `bid ≥ limit_price`, fills at `bid`.
+    - `SELL STOP`: `bid ≤ stop_price`, fills at `bid`.
+    - `BUY STOP`: `ask ≥ stop_price`, fills at `ask`.
+  - Every fill or cancellation executes inside its own database transaction with strict row locking order (`user` → `position` → `order` `FOR UPDATE`) and re-checks that the order remains `OPEN`. Fills racing cancellations serialize safely; whichever commits first wins, and the second sees `ErrOrderNotOpen`.
+  - Order reservations are released as part of fill or rejection. If funds or shares are insufficient at fill time, the order transitions to `REJECTED` with a descriptive `reject_reason` and the reservation is freed.
 
 ---
 

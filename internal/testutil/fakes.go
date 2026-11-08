@@ -8,6 +8,7 @@ package testutil
 import (
 	"context"
 	"errors"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -235,19 +236,25 @@ func (r *AuthRepo) DeleteSession(_ context.Context, sessionID string) error {
 // created in memory.
 //
 // Defaults: EnsureStock assigns stock IDs per distinct orderbook id, starting at 1. FindByIdempotencyKey
-// searches the orders Execute created (ErrOrderNotFound otherwise). Execute returns the order already
-// stored under the user's idempotency key with created=false, or else stores and returns a FILLED order
-// with created=true. It never checks cash or shares: set ExecuteFn to simulate those errors.
+// searches the orders Execute and PlacePending created (ErrOrderNotFound otherwise). Execute returns the order
+// already stored under the user's idempotency key with created=false, or else stores and returns a FILLED order
+// with created=true; PlacePending does the same with an OPEN order (story NW-08). Neither checks cash, shares or
+// reservations: set ExecuteFn / PlacePendingFn to simulate those errors. GetByID finds the user's order;
+// Cancel moves the user's OPEN order to CANCELLED (ErrOrderNotOpen otherwise).
 type OrderRepo struct {
 	mu       sync.Mutex
 	Executed []domain.ExecuteOrderParams
+	Pending  []domain.PendingOrderParams
 	Orders   []*domain.Order
 	stocks   []models.Stock
 
 	EnsureStockFn          func(ctx context.Context, orderbookID, symbol, name string) (uint, error)
 	FindByIdempotencyKeyFn func(ctx context.Context, userID uint, key string) (*domain.Order, error)
 	ExecuteFn              func(ctx context.Context, p domain.ExecuteOrderParams) (*domain.Order, bool, error)
-	ListByUserFn           func(ctx context.Context, userID uint, before *domain.OrderCursor, limit int) ([]domain.Order, error)
+	PlacePendingFn         func(ctx context.Context, p domain.PendingOrderParams) (*domain.Order, bool, error)
+	GetByIDFn              func(ctx context.Context, userID, orderID uint) (*domain.Order, error)
+	CancelFn               func(ctx context.Context, userID, orderID uint) (*domain.Order, error)
+	ListByUserFn           func(ctx context.Context, userID uint, before *domain.OrderCursor, limit int, statuses ...domain.OrderStatus) ([]domain.Order, error)
 
 	// keys maps each created order (by index in Orders) to its user and idempotency key.
 	keys []orderKey
@@ -329,19 +336,105 @@ func (r *OrderRepo) Execute(ctx context.Context, p domain.ExecuteOrderParams) (*
 	return &cp, true, nil
 }
 
-// ListByUser returns copies of the user's orders Execute created, newest first (created_at desc, then id
-// desc), strictly after before when it is set, at most limit of them.
-func (r *OrderRepo) ListByUser(ctx context.Context, userID uint, before *domain.OrderCursor, limit int) ([]domain.Order, error) {
+func (r *OrderRepo) PlacePending(ctx context.Context, p domain.PendingOrderParams) (*domain.Order, bool, error) {
+	r.mu.Lock()
+	r.Pending = append(r.Pending, p)
+	r.mu.Unlock()
+	if r.PlacePendingFn != nil {
+		return r.PlacePendingFn(ctx, p)
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if p.IdempotencyKey != "" {
+		if o := r.findLocked(p.UserID, p.IdempotencyKey); o != nil {
+			return o, false, nil
+		}
+	}
+	var stock models.Stock
+	for _, s := range r.stocks {
+		if s.ID == p.StockID {
+			stock = s
+		}
+	}
+	now := time.Date(2026, 10, 25, 9, 41, 0, 0, time.UTC).Add(time.Duration(len(r.Orders)) * time.Second)
+	o := &domain.Order{
+		ID:          uint(len(r.Orders) + 1),
+		OrderbookID: stock.OrderbookID,
+		Symbol:      stock.Symbol,
+		Name:        stock.Name,
+		Side:        p.Side,
+		Type:        p.Type,
+		Status:      domain.OrderStatusOpen,
+		Quantity:    p.Quantity,
+		LimitPrice:  p.LimitPrice,
+		StopPrice:   p.StopPrice,
+		CreatedAt:   now,
+	}
+	r.Orders = append(r.Orders, o)
+	r.keys = append(r.keys, orderKey{userID: p.UserID, key: p.IdempotencyKey})
+	cp := *o
+	return &cp, true, nil
+}
+
+func (r *OrderRepo) GetByID(ctx context.Context, userID, orderID uint) (*domain.Order, error) {
+	if r.GetByIDFn != nil {
+		return r.GetByIDFn(ctx, userID, orderID)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if i := r.indexLocked(userID, orderID); i >= 0 {
+		cp := *r.Orders[i]
+		return &cp, nil
+	}
+	return nil, domain.ErrOrderNotFound
+}
+
+func (r *OrderRepo) Cancel(ctx context.Context, userID, orderID uint) (*domain.Order, error) {
+	if r.CancelFn != nil {
+		return r.CancelFn(ctx, userID, orderID)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	i := r.indexLocked(userID, orderID)
+	if i < 0 {
+		return nil, domain.ErrOrderNotFound
+	}
+	if r.Orders[i].Status != domain.OrderStatusOpen {
+		return nil, domain.ErrOrderNotOpen
+	}
+	r.Orders[i].Status = domain.OrderStatusCancelled
+	cp := *r.Orders[i]
+	return &cp, nil
+}
+
+// indexLocked is the index in Orders of the user's order orderID, or -1. r.mu must be held.
+func (r *OrderRepo) indexLocked(userID, orderID uint) int {
+	for i, o := range r.Orders {
+		if o.ID == orderID && r.keys[i].userID == userID {
+			return i
+		}
+	}
+	return -1
+}
+
+// ListByUser returns copies of the user's orders Execute and PlacePending created, newest first (created_at
+// desc, then id desc), strictly after before when it is set, only in statuses when given, at most limit of them.
+func (r *OrderRepo) ListByUser(ctx context.Context, userID uint, before *domain.OrderCursor, limit int, statuses ...domain.OrderStatus) ([]domain.Order, error) {
 	if r.ListByUserFn != nil {
-		return r.ListByUserFn(ctx, userID, before, limit)
+		return r.ListByUserFn(ctx, userID, before, limit, statuses...)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	items := []domain.Order{}
 	for i, k := range r.keys {
-		if k.userID == userID {
-			items = append(items, *r.Orders[i])
+		if k.userID != userID {
+			continue
 		}
+		if len(statuses) > 0 && !slices.Contains(statuses, r.Orders[i].Status) {
+			continue
+		}
+		items = append(items, *r.Orders[i])
 	}
 	newerFirst := func(a, b domain.Order) bool {
 		if !a.CreatedAt.Equal(b.CreatedAt) {
