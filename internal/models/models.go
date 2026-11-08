@@ -136,3 +136,16 @@ type WatchlistItem struct {
 	Stock       Stock     `json:"stock,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 }
+
+// EquitySnapshot is one valuation of a user's account at time T (story NW-10): cash, holdings at the last
+// price, the vault (0 until NW-11) and their sum. One is written after every fill and every SNAPSHOT_INTERVAL
+// for users with an order. (user_id, t) is indexed for the per-user history and analytics reads.
+type EquitySnapshot struct {
+	ID            uint            `gorm:"primaryKey" json:"id"`
+	UserID        uint            `gorm:"not null;index:idx_equity_snapshots_user_t,priority:1" json:"user_id"`
+	T             time.Time       `gorm:"column:t;not null;index:idx_equity_snapshots_user_t,priority:2" json:"t"`
+	Cash          decimal.Decimal `gorm:"type:numeric(18,2);not null" json:"cash"`
+	HoldingsValue decimal.Decimal `gorm:"type:numeric(18,2);not null" json:"holdings_value"`
+	VaultValue    decimal.Decimal `gorm:"type:numeric(18,2);not null;default:0" json:"vault_value"`
+	Equity        decimal.Decimal `gorm:"type:numeric(18,2);not null" json:"equity"`
+}

@@ -636,3 +636,50 @@ func TestOrderService_ListOrders_RepositoryError(t *testing.T) {
 		t.Errorf("error = %v, want wrapping %v", err, boom)
 	}
 }
+
+// Story NW-10: every new fill is reported to the fill observer (the equity snapshot); replays, failures and
+// rejected requests are not.
+func TestOrderService_PlaceOrder_NotifiesFillObserver(t *testing.T) {
+	tests := []struct {
+		name    string
+		key     string
+		repo    func() *testutil.OrderRepo
+		req     domain.OrderRequest
+		place   int
+		wantObs int
+	}{
+		{name: "one fill", repo: func() *testutil.OrderRepo { return &testutil.OrderRepo{} }, req: buy("100"), place: 1, wantObs: 1},
+		{name: "a replay is no new fill", key: "k-1", repo: func() *testutil.OrderRepo { return &testutil.OrderRepo{} }, req: buy("1"), place: 3, wantObs: 1},
+		{name: "a rejected order is no fill", repo: func() *testutil.OrderRepo {
+			return &testutil.OrderRepo{ExecuteFn: func(context.Context, domain.ExecuteOrderParams) (*domain.Order, bool, error) {
+				return nil, false, domain.ErrInsufficientFunds
+			}}
+		}, req: buy("1"), place: 1, wantObs: 0},
+		{name: "an invalid request is no fill", repo: func() *testutil.OrderRepo { return &testutil.OrderRepo{} }, req: buy("0"), place: 1, wantObs: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			obs := &testutil.FillObserver{}
+			svc := newTestOrderService(tt.repo(), fjrdProvider())
+			svc.SetFillObserver(obs)
+			for range tt.place {
+				_, _, _ = svc.PlaceOrder(context.Background(), 42, tt.key, tt.req)
+			}
+			calls := obs.Calls()
+			if len(calls) != tt.wantObs {
+				t.Fatalf("observer calls = %v, want %d", calls, tt.wantObs)
+			}
+			for _, u := range calls {
+				if u != 42 {
+					t.Errorf("observer told about user %d, want 42", u)
+				}
+			}
+		})
+	}
+}
+
+func TestOrderService_PlaceOrder_WithoutObserver(t *testing.T) {
+	if _, created, err := newTestOrderService(&testutil.OrderRepo{}, fjrdProvider()).PlaceOrder(context.Background(), 1, "", buy("1")); err != nil || !created {
+		t.Fatalf("PlaceOrder() = %v, %v", created, err)
+	}
+}

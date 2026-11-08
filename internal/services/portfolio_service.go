@@ -73,9 +73,9 @@ func (s *PortfolioService) GetPortfolio(ctx context.Context, userID uint) (*doma
 			defer wg.Done()
 			// Positions are quoted by their stock's orderbook id (symbols are not unique across markets).
 			// Each goroutine writes only its own slice element, so no lock is needed.
-			if quote, err := s.provider.Quote(ctx, vp.orderbookID); err == nil && quote.Last > 0 {
-				vp.lastPrice = decimal.NewFromFloat(quote.Last).Round(2)
-				vp.dayChange = decimal.NewFromFloat(quote.ChangePercent).Round(2)
+			if q := fetchPositionQuote(ctx, s.provider, vp.orderbookID); q.ok {
+				vp.lastPrice = q.last
+				vp.dayChange = q.dayChange
 			}
 		}(&valued[i])
 	}
@@ -156,4 +156,26 @@ func (s *PortfolioService) GetPortfolio(ctx context.Context, userID uint) (*doma
 	}
 
 	return portfolio, nil
+}
+
+// positionQuote is the live price of a held instrument as the portfolio uses it: last and day change rounded
+// half-up to 2 decimals. ok is false when the quote failed or had no positive last price; the caller then
+// values the position at its avg_cost (with a day change of 0).
+type positionQuote struct {
+	last, dayChange decimal.Decimal
+	ok              bool
+}
+
+// fetchPositionQuote quotes orderbookID for valuation. GET /portfolio and the equity snapshots (story NW-10)
+// both use it, so a snapshot taken right after a fill equals the portfolio's total_equity.
+func fetchPositionQuote(ctx context.Context, provider domain.MarketDataProvider, orderbookID string) positionQuote {
+	quote, err := provider.Quote(ctx, orderbookID)
+	if err != nil || quote.Last <= 0 {
+		return positionQuote{}
+	}
+	return positionQuote{
+		last:      decimal.NewFromFloat(quote.Last).Round(2),
+		dayChange: decimal.NewFromFloat(quote.ChangePercent).Round(2),
+		ok:        true,
+	}
 }

@@ -27,6 +27,7 @@ func Migrate(db *gorm.DB) error {
 		&models.Order{},
 		&models.Watchlist{},
 		&models.WatchlistItem{},
+		&models.EquitySnapshot{},
 	); err != nil {
 		return fmt.Errorf("auto migrate: %w", err)
 	}
