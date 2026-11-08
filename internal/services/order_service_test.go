@@ -58,7 +58,7 @@ func TestOrderService_PlaceOrder_Validation(t *testing.T) {
 		{name: "quantity 0", req: buy("0"), wantMsg: "quantity must be greater than 0"},
 		{name: "quantity -1", req: buy("-1"), wantMsg: "quantity must be greater than 0"},
 		{name: "quantity 1.00001", req: buy("1.00001"), wantMsg: "quantity must have at most 4 decimals"},
-		{name: "type LIMIT", req: domain.OrderRequest{OrderbookID: "SIM-FJRD", Side: domain.OrderSideBuy, Quantity: dec("1"), Type: "LIMIT"}, wantMsg: "type must be MARKET"},
+		{name: "type IOC", req: domain.OrderRequest{OrderbookID: "SIM-FJRD", Side: domain.OrderSideBuy, Quantity: dec("1"), Type: "IOC"}, wantMsg: "type must be MARKET, LIMIT or STOP"},
 		{name: "key with a space", key: "k 123", req: buy("1"), wantMsg: "Idempotency-Key must be printable ASCII without spaces"},
 		{name: "key with non-ASCII", key: "k-ä", req: buy("1"), wantMsg: "Idempotency-Key must be printable ASCII without spaces"},
 		{name: "key too long", key: strings.Repeat("k", domain.MaxIdempotencyKeyLength+1), req: buy("1"), wantMsg: "Idempotency-Key must be at most 255 characters"},
@@ -399,8 +399,8 @@ func TestOrderService_PlaceOrder_RepositoryErrorsPassThrough(t *testing.T) {
 // keysetOrders returns a ListByUserFn over a fixed set of orders per user that follows the
 // domain.OrderRepository contract (newest first by created_at desc, id desc; strictly after before; at
 // most limit). It records every requested limit in limits.
-func keysetOrders(byUser map[uint][]domain.Order, limits *[]int) func(context.Context, uint, *domain.OrderCursor, int) ([]domain.Order, error) {
-	return func(_ context.Context, userID uint, before *domain.OrderCursor, limit int) ([]domain.Order, error) {
+func keysetOrders(byUser map[uint][]domain.Order, limits *[]int) func(context.Context, uint, *domain.OrderCursor, int, ...domain.OrderStatus) ([]domain.Order, error) {
+	return func(_ context.Context, userID uint, before *domain.OrderCursor, limit int, _ ...domain.OrderStatus) ([]domain.Order, error) {
 		if limits != nil {
 			*limits = append(*limits, limit)
 		}
@@ -595,7 +595,7 @@ func TestOrderService_ListOrders_InvalidInput(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			called := false
-			repo := &testutil.OrderRepo{ListByUserFn: func(context.Context, uint, *domain.OrderCursor, int) ([]domain.Order, error) {
+			repo := &testutil.OrderRepo{ListByUserFn: func(context.Context, uint, *domain.OrderCursor, int, ...domain.OrderStatus) ([]domain.Order, error) {
 				called = true
 				return []domain.Order{}, nil
 			}}
@@ -628,7 +628,7 @@ func TestOrderService_ListOrders_LimitBounds(t *testing.T) {
 
 func TestOrderService_ListOrders_RepositoryError(t *testing.T) {
 	boom := errors.New("db down")
-	repo := &testutil.OrderRepo{ListByUserFn: func(context.Context, uint, *domain.OrderCursor, int) ([]domain.Order, error) {
+	repo := &testutil.OrderRepo{ListByUserFn: func(context.Context, uint, *domain.OrderCursor, int, ...domain.OrderStatus) ([]domain.Order, error) {
 		return nil, boom
 	}}
 	_, err := newTestOrderService(repo, fjrdProvider()).ListOrders(context.Background(), 1, 20, "")

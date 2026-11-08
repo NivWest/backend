@@ -153,68 +153,6 @@ func TestLoad_InvalidMarketProviderErrors(t *testing.T) {
 	}
 }
 
-func TestLoad_MarketStream(t *testing.T) {
-	tests := []struct {
-		name                string
-		interval, heartbeat string
-		maxPerIP            string
-		wantInterval        time.Duration
-		wantHeartbeat       time.Duration
-		wantMax             int
-	}{
-		{name: "defaults", wantInterval: 2 * time.Second, wantHeartbeat: 10 * time.Second, wantMax: 5},
-		{name: "overrides", interval: "1s", heartbeat: "5s", maxPerIP: "3", wantInterval: time.Second, wantHeartbeat: 5 * time.Second, wantMax: 3},
-		{name: "non-positive falls back", interval: "0s", heartbeat: "-1s", maxPerIP: "0", wantInterval: 2 * time.Second, wantHeartbeat: 10 * time.Second, wantMax: 5},
-		{name: "invalid falls back", interval: "fast", heartbeat: "x", maxPerIP: "many", wantInterval: 2 * time.Second, wantHeartbeat: 10 * time.Second, wantMax: 5},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("MARKET_STREAM_INTERVAL", tt.interval)
-			t.Setenv("MARKET_STREAM_HEARTBEAT", tt.heartbeat)
-			t.Setenv("MARKET_STREAM_MAX_PER_IP", tt.maxPerIP)
-			cfg, err := Load("")
-			if err != nil {
-				t.Fatal(err)
-			}
-			m := cfg.Market
-			if m.StreamInterval != tt.wantInterval || m.StreamHeartbeat != tt.wantHeartbeat || m.StreamMaxPerIP != tt.wantMax {
-				t.Errorf("stream config = %s %s %d, want %s %s %d", m.StreamInterval, m.StreamHeartbeat, m.StreamMaxPerIP,
-					tt.wantInterval, tt.wantHeartbeat, tt.wantMax)
-			}
-		})
-	}
-}
-
-func TestLoad_Analytics(t *testing.T) {
-	tests := []struct {
-		name         string
-		interval     string
-		riskFree     string
-		wantInterval time.Duration
-		wantRiskFree float64
-	}{
-		{"defaults", "", "", time.Hour, 0.02},
-		{"overrides", "15m", "0.035", 15 * time.Minute, 0.035},
-		{"zero rate is allowed", "1h", "0", time.Hour, 0},
-		{"invalid values fall back", "often", "two percent", time.Hour, 0.02},
-		{"non-positive interval falls back", "-5m", "NaN", time.Hour, 0.02},
-		{"zero interval falls back", "0s", "+Inf", time.Hour, 0.02},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("SNAPSHOT_INTERVAL", tt.interval)
-			t.Setenv("RISK_FREE_RATE", tt.riskFree)
-			cfg, err := Load("")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if cfg.Analytics.SnapshotInterval != tt.wantInterval || cfg.Analytics.RiskFreeRate != tt.wantRiskFree {
-				t.Errorf("Analytics = %+v, want %v / %v", cfg.Analytics, tt.wantInterval, tt.wantRiskFree)
-			}
-		})
-	}
-}
-
 func TestLoad_LLM(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -316,6 +254,103 @@ func TestLoad_Observability(t *testing.T) {
 			obs := cfg.Observability
 			if obs.LogLevel != tc.wantLevel || obs.LogFormat != tc.wantFormat || obs.OtelEndpoint != tc.wantEndpoint {
 				t.Fatalf("Observability = %+v, want level=%s format=%s endpoint=%s", obs, tc.wantLevel, tc.wantFormat, tc.wantEndpoint)
+			}
+		})
+	}
+}
+
+func TestLoad_MarketStream(t *testing.T) {
+	tests := []struct {
+		name                string
+		interval, heartbeat string
+		maxPerIP            string
+		wantInterval        time.Duration
+		wantHeartbeat       time.Duration
+		wantMax             int
+	}{
+		{name: "defaults", wantInterval: 2 * time.Second, wantHeartbeat: 10 * time.Second, wantMax: 5},
+		{name: "overrides", interval: "1s", heartbeat: "5s", maxPerIP: "3", wantInterval: time.Second, wantHeartbeat: 5 * time.Second, wantMax: 3},
+		{name: "non-positive falls back", interval: "0s", heartbeat: "-1s", maxPerIP: "0", wantInterval: 2 * time.Second, wantHeartbeat: 10 * time.Second, wantMax: 5},
+		{name: "invalid falls back", interval: "fast", heartbeat: "x", maxPerIP: "many", wantInterval: 2 * time.Second, wantHeartbeat: 10 * time.Second, wantMax: 5},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("MARKET_STREAM_INTERVAL", tt.interval)
+			t.Setenv("MARKET_STREAM_HEARTBEAT", tt.heartbeat)
+			t.Setenv("MARKET_STREAM_MAX_PER_IP", tt.maxPerIP)
+			cfg, err := Load("")
+			if err != nil {
+				t.Fatal(err)
+			}
+			m := cfg.Market
+			if m.StreamInterval != tt.wantInterval || m.StreamHeartbeat != tt.wantHeartbeat || m.StreamMaxPerIP != tt.wantMax {
+				t.Errorf("stream config = %s %s %d, want %s %s %d", m.StreamInterval, m.StreamHeartbeat, m.StreamMaxPerIP,
+					tt.wantInterval, tt.wantHeartbeat, tt.wantMax)
+			}
+		})
+	}
+}
+
+func TestLoad_MatchingInterval(t *testing.T) {
+	tests := []struct {
+		name, env string
+		want      time.Duration
+	}{
+		{name: "unset defaults to 1s", env: "", want: time.Second},
+		{name: "compose value", env: "1s", want: time.Second},
+		{name: "override", env: "250ms", want: 250 * time.Millisecond},
+		{name: "minimum accepted", env: "100ms", want: 100 * time.Millisecond},
+		{name: "below minimum falls back", env: "10ms", want: time.Second},
+		{name: "zero falls back", env: "0s", want: time.Second},
+		{name: "negative falls back", env: "-1s", want: time.Second},
+		{name: "garbage falls back", env: "soon", want: time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("MATCHING_INTERVAL", tt.env)
+			cfg, err := Load("")
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.Matching.Interval != tt.want {
+				t.Errorf("Matching.Interval = %v, want %v", cfg.Matching.Interval, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoad_Analytics(t *testing.T) {
+	tests := []struct {
+		name         string
+		interval     string
+		riskFree     string
+		vaultAPY     string
+		wantInterval time.Duration
+		wantRiskFree float64
+		wantVaultAPY float64
+	}{
+		{"defaults", "", "", "", time.Hour, 0.051, 0.051},
+		{"overrides", "15m", "0.035", "0.045", 15 * time.Minute, 0.035, 0.045},
+		{"zero rate is allowed", "1h", "0", "0.051", time.Hour, 0, 0.051},
+		{"risk free rate defaults to vault apy", "1h", "", "0.075", time.Hour, 0.075, 0.075},
+		{"invalid values fall back", "often", "two percent", "five percent", time.Hour, 0.051, 0.051},
+		{"non-positive interval falls back", "-5m", "NaN", "NaN", time.Hour, 0.051, 0.051},
+		{"zero interval falls back", "0s", "+Inf", "+Inf", time.Hour, 0.051, 0.051},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("SNAPSHOT_INTERVAL", tt.interval)
+			t.Setenv("RISK_FREE_RATE", tt.riskFree)
+			t.Setenv("VAULT_APY", tt.vaultAPY)
+			cfg, err := Load("")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Analytics.SnapshotInterval != tt.wantInterval || cfg.Analytics.RiskFreeRate != tt.wantRiskFree {
+				t.Errorf("Analytics = %+v, want %v / %v", cfg.Analytics, tt.wantInterval, tt.wantRiskFree)
+			}
+			if cfg.Vault.APY != tt.wantVaultAPY {
+				t.Errorf("Vault.APY = %v, want %v", cfg.Vault.APY, tt.wantVaultAPY)
 			}
 		})
 	}

@@ -125,6 +125,15 @@ type Registrar interface {
   - `GET /portfolio/history?range=1d|1w|1m|all` (default `1d`; anything else, an empty value included, is 400 `VALIDATION_ERROR`): `1d` raw snapshots of the last 24 h, `1w`/`1m` the last snapshot per UTC hour of the last 7/30 days, `all` the last per UTC day.
   - `GET /portfolio/analytics`: `total_return_pct` from the live `total_equity` and `domain.StartingEquity` (100,000); volatility, Sharpe (`RISK_FREE_RATE`, default `0.02`) and max drawdown over the daily series once `data_points` (daily returns) ≥ 5 (`analytics.MinDailyReturns`), otherwise null with `sufficient_data: false`; `allocation` = positions (label = symbol, largest first) then `Cash`, weights in percent of total equity summing to exactly 100 (the rounding remainder goes to the largest slice). Results are rounded half-up to 2 decimals.
 
+### 3.5b. Risk-adjusted Leaderboard (story NW-13)
+- **Profile Opt-In:** `models.User` gains `display_name` (indexed via case-insensitive unique expression `lower(display_name)`), `leaderboard_opt_in` (bool), and `opted_in_at` (*time.Time). `PATCH /api/v1/me` (`UserHandler.UpdateProfile`) validates display names (3–20 characters, `^[A-Za-z0-9_-]{3,20}$`) and sets `opted_in_at` when newly opting in. Conflicts return 409 `CONFLICT`.
+- **Rankings Materialization:** Materialized atomically per metric in `leaderboard_entries` table (`LeaderboardRepository.RebuildMetric` swaps old entries for new in a single transaction).
+  - Background leader refresh job runs every `LEADERBOARD_REFRESH` (default `5m`, compose `5s`), coordinated across cluster replicas via a PostgreSQL session advisory lock (`LeaderboardLockKey = 0x4e573133`).
+  - `metric=return`: Ranks all opted-in users by `total_return_pct` descending.
+  - `metric=sharpe`: Ranks only opted-in users with `sufficient_data` (at least 5 daily returns from NW-10 snapshot analytics) by `sharpe_ratio` descending.
+  - Ties break deterministically by earlier `opted_in_at` ascending, then `user_id` ascending.
+- **Serving Leaderboards:** `GET /api/v1/leaderboard?metric=return|sharpe&limit=50` (`LeaderboardHandler.GetLeaderboard`) serves ranked entries. If authenticated and caller is opted-in but outside the top page, caller's entry is appended to the response items. Entries strictly omit PII, exposing only `rank`, `display_name`, `total_return_pct`, `sharpe_ratio`, `max_drawdown_pct`, and `is_me`.
+
 ### 3.6. Error Handling & HTTP Status Codes
 - Define domain-specific errors in `internal/domain/errors.go`.
 - Repositories translate `gorm.ErrRecordNotFound` to domain errors.
@@ -161,6 +170,7 @@ type Registrar interface {
 - Disconnects are seen through the request context (the subscription ends with it). `cmd/api` handles SIGINT/SIGTERM with `http.Server.Shutdown`, having registered `QuoteHub.Close` with `RegisterOnShutdown`, so open streams end and the server drains.
 - Single instance only: the hub is in memory. Several API instances would each poll; a Redis pub/sub fan-out is future work.
 - Tests: `quote_hub_test.go` (manual tickers `testutil.ManualTickers`, `testutil.QuoteBoard`), `market_stream_handler_test.go` (a real `httptest.Server` with a 300ms `WriteTimeout`), `middleware/concurrency_test.go`.
+
 ### 3.9. API Contract (story NW-07)
 - `api/openapi.yaml` (OpenAPI 3.1, `info.title: TradeEdu API`) is the enforced source of truth. The `backend/api` package embeds it with `go:embed` (`api.OpenAPISpec`); `handlers.OpenAPIHandler` serves it at `GET /api/v1/openapi.yaml` (`application/yaml`) and renders it at `GET /api/docs` with a pinned Scalar build (`scalarVersion` + SRI hash in `openapi_handler.go`, strict CSP). Both are public.
 - The router lives in `internal/app/router.go` (`App.Router`): `/api/v1` gets every non-nil handler, `/api` gets the docs page. `cmd/api` serves exactly this engine.
@@ -169,6 +179,28 @@ type Registrar interface {
   - `api/spec_test.go`: the spec parses as OpenAPI 3.1 and `info.version` equals `VERSION` (bump both on a release).
 - `make api-lint` runs Redocly (`redocly.yaml`, recommended rules) on the spec. It needs network for `npx`, so it runs in CI (job `api-contract`), not in the offline fast checks.
 - Changing the API: edit `api/openapi.yaml` first (new path, schemas, error codes in `ErrorCode`), then the code; public operations say `security: []`. The frontend vendors the file and regenerates its types (`npm run api:sync && npm run api:gen`).
+
+### 3.10. Limit & Stop Orders & Background Matching Engine (story NW-08)
+- **Pending Orders:** In addition to immediate `MARKET` orders, users can place `LIMIT` orders (`limit_price`) and `STOP` orders (`stop_price`). Both start in status `OPEN`.
+- **Reservations at placement:**
+  - `BUY LIMIT` reserves `quantity × limit_price + commission(quantity × limit_price)` in `users.reserved_cash`.
+  - `BUY STOP` reserves `quantity × (stop_price × 1.05) + commission(quantity × stop_price × 1.05)` in `users.reserved_cash`.
+  - `SELL LIMIT` and `SELL STOP` reserve `quantity` shares in `positions.reserved_quantity`.
+  - Available buying power is `balance − reserved_cash`; available shares are `quantity − reserved_quantity`.
+- **Single Active Engine Replica (Advisory Lock Leader Election):**
+  - A background ticker loop (`services.MatchingEngine`) runs every `MATCHING_INTERVAL` (configured via `MATCHING_INTERVAL`, default 1s).
+  - Leader election is implemented via a PostgreSQL session advisory lock (`pg_try_advisory_lock(0x4E570008)`) over a dedicated `*sql.Conn` (`internal/repository/leader_lock.go`).
+  - Only the lock holder executes matching cycles; non-leaders retry lock acquisition on subsequent ticks.
+  - On shutdown or context cancellation, the lock connection is explicitly closed and released (`pg_advisory_unlock`), allowing failover.
+- **Cycle Execution & Concurrency:**
+  - Each cycle reads all `OPEN` orders via the partial index `idx_orders_open`, groups them by instrument, and quotes each instrument concurrently using a bounded worker pool (`DefaultMatchingWorkers = 8`).
+  - Trigger evaluation:
+    - `BUY LIMIT`: `ask ≤ limit_price`, fills at `ask`.
+    - `SELL LIMIT`: `bid ≥ limit_price`, fills at `bid`.
+    - `SELL STOP`: `bid ≤ stop_price`, fills at `bid`.
+    - `BUY STOP`: `ask ≥ stop_price`, fills at `ask`.
+  - Every fill or cancellation executes inside its own database transaction with strict row locking order (`user` → `position` → `order` `FOR UPDATE`) and re-checks that the order remains `OPEN`. Fills racing cancellations serialize safely; whichever commits first wins, and the second sees `ErrOrderNotOpen`.
+  - Order reservations are released as part of fill or rejection. If funds or shares are insufficient at fill time, the order transitions to `REJECTED` with a descriptive `reject_reason` and the reservation is freed.
 
 ### 3.11. Observability: Structured Logs, Metrics, Tracing (story NW-19)
 - **Structured logging:** `log/slog` JSON/Text handler (`LOG_LEVEL=debug|info|warn|error`, `LOG_FORMAT=json|text`).

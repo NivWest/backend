@@ -32,8 +32,10 @@ type App struct {
 	PortfolioHandler    *handlers.PortfolioHandler
 	OrderHandler        *handlers.OrderHandler
 	WatchlistHandler    *handlers.WatchlistHandler
-	AnalyticsHandler    *handlers.AnalyticsHandler
 	AIHandler           *handlers.AIHandler
+	AnalyticsHandler    *handlers.AnalyticsHandler
+	VaultHandler        *handlers.VaultHandler
+	LeaderboardHandler  *handlers.LeaderboardHandler
 	AuthRepo            domain.AuthRepository
 
 	// QuoteHub fans live quotes out to the streams. Close it on shutdown (cmd/api registers it with
@@ -108,6 +110,23 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	orderService.SetMetricsObserver(metrics)
 	orderHandler := handlers.NewOrderHandler(orderService, authRepo)
 
+	// The matching engine (story NW-08) fills LIMIT and STOP orders. Every replica runs the loop, but only the
+	// holder of the Postgres advisory lock runs cycles; the others retry every interval. It stops (and releases
+	// the lock) when closeApp cancels its context.
+	leaderLock, err := repository.NewAdvisoryLock(db, domain.MatchingEngineLockKey)
+	if err != nil {
+		cancelWarm()
+		return nil, nil, err
+	}
+	engine := services.NewMatchingEngine(repository.NewMatchingRepository(db), provider, leaderLock, time.Now, services.DefaultMatchingWorkers)
+	matchCtx, cancelMatch := context.WithCancel(context.Background())
+	matchDone := make(chan struct{})
+	go func() {
+		defer close(matchDone)
+		engine.Run(matchCtx, cfg.Matching.Interval)
+	}()
+	slog.Info("matching engine configured", "interval", cfg.Matching.Interval)
+
 	watchlistRepo := repository.NewWatchlistRepository(db)
 	watchlistService := services.NewWatchlistService(watchlistRepo, provider)
 	watchlistHandler := handlers.NewWatchlistHandler(watchlistService, authRepo)
@@ -119,6 +138,17 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	briefService := services.NewAIBriefService(gateway, provider, repository.NewAIBriefRepository(db), time.Now)
 	aiHandler := handlers.NewAIHandler(briefService, gateway, authRepo)
 
+	vaultRepo := repository.NewVaultRepository(db)
+	vaultService := services.NewVaultService(vaultRepo, userRepo, cfg.Vault.APY, time.Now)
+	vaultHandler := handlers.NewVaultHandler(vaultService, authRepo)
+
+	portfolioService.SetVault(vaultRepo, cfg.Vault.APY, time.Now)
+	snapshotService.SetVault(vaultRepo, cfg.Vault.APY)
+
+	leaderboardRepo := repository.NewLeaderboardRepository(db)
+	leaderboardService := services.NewLeaderboardService(leaderboardRepo, userRepo, analyticsService)
+	leaderboardHandler := handlers.NewLeaderboardHandler(leaderboardService, authRepo)
+
 	// The guest purger runs until closeApp cancels its context: once now, then every GuestPurgeInterval.
 	guestRepo := repository.NewGuestRepository(db)
 	purger := services.NewGuestPurger(guestRepo, domain.GuestRetention, time.Now)
@@ -129,8 +159,15 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	go runSnapshotScheduler(snapshotCtx, newTimeTicker(cfg.Analytics.SnapshotInterval), snapshotService)
 	slog.Info("equity snapshots configured", "interval", cfg.Analytics.SnapshotInterval, "risk_free_rate", cfg.Analytics.RiskFreeRate)
 
+	leaderboardCtx, cancelLeaderboard := context.WithCancel(context.Background())
+	go runLeaderboardScheduler(leaderboardCtx, newTimeTicker(cfg.Leaderboard.RefreshInterval), leaderboardService, db)
+	slog.Info("leaderboard refresh configured", "interval", cfg.Leaderboard.RefreshInterval)
+
 	closeApp := func() error {
 		quoteHub.Close()
+		cancelMatch()
+		<-matchDone // the engine releases its lock connection before the pool closes
+		cancelLeaderboard()
 		cancelSnapshots()
 		cancelPurge()
 		cancelWarm()
@@ -157,8 +194,10 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 		PortfolioHandler:    portfolioHandler,
 		OrderHandler:        orderHandler,
 		WatchlistHandler:    watchlistHandler,
-		AnalyticsHandler:    analyticsHandler,
 		AIHandler:           aiHandler,
+		AnalyticsHandler:    analyticsHandler,
+		VaultHandler:        vaultHandler,
+		LeaderboardHandler:  leaderboardHandler,
 		AuthRepo:            authRepo,
 		Metrics:             metrics,
 	}, closeApp, nil

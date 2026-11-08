@@ -63,7 +63,9 @@ func main() {
 	// can drain the remaining connections (story NW-09).
 	server.RegisterOnShutdown(appInstance.QuoteHub.Close)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// Graceful shutdown (story NW-08): on SIGINT/SIGTERM stop accepting requests, let in-flight ones finish,
+	// then closeApp stops the background workers (the matching engine releases its leader lock) and the pool.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	serveErr := make(chan error, 1)
@@ -71,7 +73,7 @@ func main() {
 
 	select {
 	case err := <-serveErr:
-		if !errors.Is(err, http.ErrServerClosed) {
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			_ = closeApp()
 			slog.Error("server error", "error", err)
 			os.Exit(1)
@@ -79,10 +81,10 @@ func main() {
 	case <-ctx.Done():
 		slog.Info("shutting down (waiting for open requests)", "timeout", shutdownTimeout)
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			slog.Error("shutdown failed", "error", err)
 		}
-		cancel()
 	}
 
 	if err := closeApp(); err != nil {

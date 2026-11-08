@@ -29,6 +29,8 @@ type SnapshotService struct {
 	positions domain.PortfolioRepository
 	users     domain.UserRepository
 	provider  domain.MarketDataProvider
+	vaultRepo domain.VaultRepository
+	vaultAPY  float64
 	now       func() time.Time
 }
 
@@ -46,6 +48,15 @@ func NewSnapshotService(
 		now = time.Now
 	}
 	return &SnapshotService{snapshots: snapshots, positions: positions, users: users, provider: provider, now: now}
+}
+
+// SetVault attaches vault repository and APY for including vault value in snapshots (story NW-11).
+func (s *SnapshotService) SetVault(vaultRepo domain.VaultRepository, apy float64) {
+	s.vaultRepo = vaultRepo
+	if apy <= 0 {
+		apy = domain.DefaultVaultAPY
+	}
+	s.vaultAPY = apy
 }
 
 // quoteFunc returns the valuation quote of one instrument.
@@ -144,6 +155,11 @@ func (s *SnapshotService) value(ctx context.Context, userID uint, t time.Time, q
 		holdings = holdings.Add(price.Mul(pos.Quantity))
 	}
 	vault := decimal.Zero
+	if s.vaultRepo != nil {
+		if v, err := s.vaultRepo.GetVaultBalance(ctx, userID, s.vaultAPY, t); err == nil {
+			vault = v
+		}
+	}
 	return models.EquitySnapshot{
 		UserID:        userID,
 		T:             t,
