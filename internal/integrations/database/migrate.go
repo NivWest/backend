@@ -28,8 +28,14 @@ func Migrate(db *gorm.DB) error {
 		&models.Watchlist{},
 		&models.WatchlistItem{},
 		&models.EquitySnapshot{},
+		&models.LeaderboardEntry{},
 	); err != nil {
 		return fmt.Errorf("auto migrate: %w", err)
+	}
+
+	// Case-insensitive unique index for display_name (story NW-13).
+	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_display_name_lower ON users (lower(display_name)) WHERE display_name IS NOT NULL`).Error; err != nil {
+		return fmt.Errorf("create idx_users_display_name_lower: %w", err)
 	}
 
 	// AutoMigrate retypes columns whose type differs (users.balance and positions.* move from
