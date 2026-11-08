@@ -28,7 +28,7 @@ type AdvisoryLock struct {
 // If already held by another session, it returns nil and false.
 // If not running on Postgres, it returns an AdvisoryLock and true (no-op for non-postgres databases).
 func TryAcquireAdvisoryLock(ctx context.Context, db *gorm.DB, key int64) (*AdvisoryLock, bool, error) {
-	if db.Dialector.Name() != "postgres" {
+	if db == nil || db.Dialector == nil || db.Dialector.Name() != "postgres" {
 		return &AdvisoryLock{key: key, held: true}, true, nil
 	}
 

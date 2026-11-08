@@ -45,6 +45,7 @@ func (a *App) registrars() []Registrar {
 	add(a.OrderHandler == nil, a.OrderHandler)
 	add(a.WatchlistHandler == nil, a.WatchlistHandler)
 	add(a.AnalyticsHandler == nil, a.AnalyticsHandler)
+	add(a.LeaderboardHandler == nil, a.LeaderboardHandler)
 	// SimHandler is nil unless MARKET_DATA_PROVIDER=simulated and MARKET_SIM_CONTROL_ENABLED=true.
 	add(a.SimHandler == nil, a.SimHandler)
 	return out

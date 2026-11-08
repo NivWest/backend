@@ -146,6 +146,7 @@ func TestUserHandler(t *testing.T) {
 		want := map[string]any{
 			"id": float64(1), "name": "Member", "email": "member@example.com",
 			"role": domain.RoleMember, "balance": float64(2500), "is_guest": false,
+			"display_name": nil, "leaderboard_opt_in": false,
 		}
 		for k, v := range want {
 			if body[k] != v {
@@ -177,6 +178,58 @@ func TestUserHandler(t *testing.T) {
 		if _, ok := body["google_id"]; ok {
 			t.Errorf("profile must not contain google_id: %s", w.Body.String())
 		}
+	})
+
+	t.Run("PATCH /me requires auth", func(t *testing.T) {
+		w := do(t, newRouter(testutil.NewUserRepo()), http.MethodPatch, "/api/v1/me", "", map[string]any{"display_name": "bull_42"})
+		expectStatus(t, w, http.StatusUnauthorized)
+		expectErrorCode(t, w, domain.CodeUnauthenticated)
+	})
+
+	t.Run("PATCH /me updates profile, rejects conflicts and invalid names (AC1)", func(t *testing.T) {
+		user1 := &models.User{ID: 1, Name: "Guest 1", Email: "g1@test.invalid", Role: domain.RoleGuest, Balance: decimal.NewFromInt(100000)}
+		user2 := &models.User{ID: 2, Name: "Guest 2", Email: "g2@test.invalid", Role: domain.RoleGuest, Balance: decimal.NewFromInt(100000)}
+		users := testutil.NewUserRepo(user1, user2)
+		auth := testutil.NewAuthRepo().
+			WithSession("session-1", user1).
+			WithSession("session-2", user2)
+		router := newRouterWithAuth(users, auth)
+
+		// 1. user1 sets display_name: "bull_42", leaderboard_opt_in: true -> 200
+		w1 := do(t, router, http.MethodPatch, "/api/v1/me", "session-1", map[string]any{
+			"display_name":       "bull_42",
+			"leaderboard_opt_in": true,
+		})
+		expectStatus(t, w1, http.StatusOK)
+		var p1 map[string]any
+		_ = json.Unmarshal(w1.Body.Bytes(), &p1)
+		if p1["display_name"] != "bull_42" || p1["leaderboard_opt_in"] != true {
+			t.Errorf("expected bull_42 and opt_in true, got %s", w1.Body.String())
+		}
+
+		// 2. user2 attempts case-insensitive duplicate "BULL_42" -> 409 CONFLICT
+		w2 := do(t, router, http.MethodPatch, "/api/v1/me", "session-2", map[string]any{
+			"display_name":       "BULL_42",
+			"leaderboard_opt_in": true,
+		})
+		expectStatus(t, w2, http.StatusConflict)
+		expectErrorCode(t, w2, domain.CodeConflict)
+
+		// 3. "x" returns 400 VALIDATION_ERROR
+		w3 := do(t, router, http.MethodPatch, "/api/v1/me", "session-2", map[string]any{
+			"display_name":       "x",
+			"leaderboard_opt_in": true,
+		})
+		expectStatus(t, w3, http.StatusBadRequest)
+		expectErrorCode(t, w3, domain.CodeValidation)
+
+		// 4. "bad name!" returns 400 VALIDATION_ERROR
+		w4 := do(t, router, http.MethodPatch, "/api/v1/me", "session-2", map[string]any{
+			"display_name":       "bad name!",
+			"leaderboard_opt_in": true,
+		})
+		expectStatus(t, w4, http.StatusBadRequest)
+		expectErrorCode(t, w4, domain.CodeValidation)
 	})
 
 	t.Run("DELETE /admin/users/:id requires auth", func(t *testing.T) {

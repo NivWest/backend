@@ -76,6 +76,7 @@ func TestAuthHandler_Guest(t *testing.T) {
 		want := map[string]any{
 			"role": domain.RoleGuest, "is_guest": true,
 			"balance": domain.MoneyFloat(domain.GuestStartingBalance), "name": domain.GuestName,
+			"display_name": nil, "leaderboard_opt_in": false,
 		}
 		for k, v := range want {
 			if body[k] != v {
@@ -91,7 +92,7 @@ func TestAuthHandler_Guest(t *testing.T) {
 		if _, ok := body["google_id"]; ok {
 			t.Errorf("body must not contain google_id: %s", w.Body.String())
 		}
-		if len(body) != 6 {
+		if len(body) != 8 {
 			t.Errorf("body has unexpected keys: %s", w.Body.String())
 		}
 

@@ -18,7 +18,7 @@ type User struct {
 	LeaderboardOptIn bool            `gorm:"not null;default:false" json:"leaderboard_opt_in"`
 	OptedInAt        *time.Time      `json:"opted_in_at,omitempty"`
 	Role             string          `gorm:"type:varchar(20);not null;default:member" json:"role"`
-	Balance  decimal.Decimal `gorm:"type:numeric(18,2);not null;default:100000.00" json:"balance"` // Simulator starting cash
+	Balance          decimal.Decimal `gorm:"type:numeric(18,2);not null;default:100000.00" json:"balance"` // Simulator starting cash
 	// RealizedPnL accumulates sell total − avg_cost × quantity sold over every SELL (story NW-05).
 	RealizedPnL decimal.Decimal `gorm:"column:realized_pnl;type:numeric(18,2);not null;default:0" json:"realized_pnl"`
 	Positions   []Position      `json:"positions,omitempty"`

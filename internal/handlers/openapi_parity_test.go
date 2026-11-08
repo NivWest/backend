@@ -85,6 +85,8 @@ func fullApp() *app.App {
 		WatchlistHandler: handlers.NewWatchlistHandler(services.NewWatchlistService(testutil.NewWatchlistRepo(), provider), auth),
 		AnalyticsHandler: handlers.NewAnalyticsHandler(services.NewAnalyticsService(&testutil.SnapshotRepo{},
 			services.NewPortfolioService(&testutil.PortfolioRepo{}, provider, users), 0.02, nil), auth),
+		LeaderboardHandler: handlers.NewLeaderboardHandler(services.NewLeaderboardService(testutil.NewLeaderboardRepo(), users,
+			services.NewAnalyticsService(&testutil.SnapshotRepo{}, services.NewPortfolioService(&testutil.PortfolioRepo{}, provider, users), 0.02, nil)), auth),
 		SimHandler: handlers.NewSimHandler(&testutil.SimControl{}),
 		AuthRepo:   auth,
 	}

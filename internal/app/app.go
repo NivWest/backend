@@ -19,16 +19,17 @@ import (
 )
 
 type App struct {
-	HealthHandler    *handlers.HealthHandler
-	OpenAPIHandler   *handlers.OpenAPIHandler
-	UserHandler      *handlers.UserHandler
-	MarketHandler    *handlers.MarketHandler
-	AuthHandler      *handlers.AuthHandler
-	PortfolioHandler *handlers.PortfolioHandler
-	OrderHandler     *handlers.OrderHandler
-	WatchlistHandler *handlers.WatchlistHandler
-	AnalyticsHandler *handlers.AnalyticsHandler
-	AuthRepo         domain.AuthRepository
+	HealthHandler      *handlers.HealthHandler
+	OpenAPIHandler     *handlers.OpenAPIHandler
+	UserHandler        *handlers.UserHandler
+	MarketHandler      *handlers.MarketHandler
+	AuthHandler        *handlers.AuthHandler
+	PortfolioHandler   *handlers.PortfolioHandler
+	OrderHandler       *handlers.OrderHandler
+	WatchlistHandler   *handlers.WatchlistHandler
+	AnalyticsHandler   *handlers.AnalyticsHandler
+	LeaderboardHandler *handlers.LeaderboardHandler
+	AuthRepo           domain.AuthRepository
 
 	// SimHandler is nil unless MARKET_DATA_PROVIDER=simulated and MARKET_SIM_CONTROL_ENABLED=true (dev/test only).
 	SimHandler *handlers.SimHandler
@@ -85,6 +86,10 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	watchlistService := services.NewWatchlistService(watchlistRepo, provider)
 	watchlistHandler := handlers.NewWatchlistHandler(watchlistService, authRepo)
 
+	leaderboardRepo := repository.NewLeaderboardRepository(db)
+	leaderboardService := services.NewLeaderboardService(leaderboardRepo, userRepo, analyticsService)
+	leaderboardHandler := handlers.NewLeaderboardHandler(leaderboardService, authRepo)
+
 	// The guest purger runs until closeApp cancels its context: once now, then every GuestPurgeInterval.
 	guestRepo := repository.NewGuestRepository(db)
 	purger := services.NewGuestPurger(guestRepo, domain.GuestRetention, time.Now)
@@ -95,7 +100,12 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	go runSnapshotScheduler(snapshotCtx, newTimeTicker(cfg.Analytics.SnapshotInterval), snapshotService)
 	log.Printf("equity snapshots every %s, risk-free rate %.4f", cfg.Analytics.SnapshotInterval, cfg.Analytics.RiskFreeRate)
 
+	leaderboardCtx, cancelLeaderboard := context.WithCancel(context.Background())
+	go runLeaderboardScheduler(leaderboardCtx, newTimeTicker(cfg.Leaderboard.RefreshInterval), leaderboardService, db)
+	log.Printf("leaderboard refresh every %s", cfg.Leaderboard.RefreshInterval)
+
 	closeApp := func() error {
+		cancelLeaderboard()
 		cancelSnapshots()
 		cancelPurge()
 		cancelWarm()
@@ -111,16 +121,17 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 			domain.Features{GuestAuth: cfg.Auth.GuestEnabled, SimControl: simHandler != nil},
 			cfg.Market.Provider,
 		),
-		OpenAPIHandler:   handlers.NewOpenAPIHandler(api.OpenAPISpec),
-		UserHandler:      userHandler,
-		MarketHandler:    marketHandler,
-		SimHandler:       simHandler,
-		AuthHandler:      authHandler,
-		PortfolioHandler: portfolioHandler,
-		OrderHandler:     orderHandler,
-		WatchlistHandler: watchlistHandler,
-		AnalyticsHandler: analyticsHandler,
-		AuthRepo:         authRepo,
+		OpenAPIHandler:     handlers.NewOpenAPIHandler(api.OpenAPISpec),
+		UserHandler:        userHandler,
+		MarketHandler:      marketHandler,
+		SimHandler:         simHandler,
+		AuthHandler:        authHandler,
+		PortfolioHandler:   portfolioHandler,
+		OrderHandler:       orderHandler,
+		WatchlistHandler:   watchlistHandler,
+		AnalyticsHandler:   analyticsHandler,
+		LeaderboardHandler: leaderboardHandler,
+		AuthRepo:           authRepo,
 	}, closeApp, nil
 }
 

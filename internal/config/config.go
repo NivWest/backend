@@ -12,14 +12,15 @@ import (
 )
 
 type Config struct {
-	Server    Server
-	Database  Database
-	Redis     Redis
-	Avanza    Avanza
-	Market    Market
-	RateLimit RateLimit
-	Auth      Auth
-	Analytics Analytics
+	Server      Server
+	Database    Database
+	Redis       Redis
+	Avanza      Avanza
+	Market      Market
+	RateLimit   RateLimit
+	Auth        Auth
+	Analytics   Analytics
+	Leaderboard Leaderboard
 }
 
 type Server struct {
@@ -70,6 +71,11 @@ type Analytics struct {
 	SnapshotInterval time.Duration
 	// RiskFreeRate is the annual risk-free rate of the Sharpe ratio as a fraction (RISK_FREE_RATE, default 0.02).
 	RiskFreeRate float64
+}
+
+// Leaderboard configures periodic leaderboard materialization (story NW-13).
+type Leaderboard struct {
+	RefreshInterval time.Duration
 }
 
 type RateLimit struct {
@@ -191,6 +197,10 @@ func Load(envFile string) (*Config, error) {
 		Analytics: Analytics{
 			SnapshotInterval: getPositiveDuration("SNAPSHOT_INTERVAL", time.Hour),
 			RiskFreeRate:     getFloat("RISK_FREE_RATE", 0.02),
+		},
+
+		Leaderboard: Leaderboard{
+			RefreshInterval: getPositiveDuration("LEADERBOARD_REFRESH", 5*time.Minute),
 		},
 	}, nil
 }
