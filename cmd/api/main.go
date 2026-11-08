@@ -3,32 +3,54 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"backend/internal/app"
 	"backend/internal/config"
+	"backend/internal/observability"
 	"github.com/gin-gonic/gin"
 )
 
-// shutdownTimeout bounds how long in-flight requests may finish after SIGINT/SIGTERM.
-const shutdownTimeout = 10 * time.Second
+// shutdownTimeout bounds how long SIGINT/SIGTERM waits for in-flight requests before the server exits.
+const shutdownTimeout = 15 * time.Second
 
 func main() {
 	cfg, err := config.Load(".env")
 	if err != nil {
-		log.Fatal(err)
+		slog.Error("failed to load config", "error", err)
+		os.Exit(1)
 	}
 
-	app, closeApp, err := app.NewApp(cfg)
+	logger := observability.NewLogger(os.Stdout, cfg.Observability.LogLevel, cfg.Observability.LogFormat)
+	slog.SetDefault(logger)
+
+	shutdownTracer, err := observability.InitTracer("tradeedu-api", cfg.Observability.OtelEndpoint)
 	if err != nil {
-		log.Fatal(err)
+		slog.Error("failed to initialize tracer", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTracer(ctx)
+	}()
+
+	appInstance, closeApp, err := app.NewApp(cfg)
+	if err != nil {
+		slog.Error("failed to initialize app", "error", err)
+		os.Exit(1)
 	}
 
-	engine := app.Router(gin.Logger(), gin.Recovery())
+	engine := appInstance.Router(
+		observability.RequestLogger(logger),
+		observability.HTTPMetrics(appInstance.Metrics),
+		gin.Recovery(),
+	)
 
 	server := &http.Server{
 		Addr:         cfg.Server.Host + ":" + cfg.Server.Port,
@@ -39,7 +61,7 @@ func main() {
 	}
 	// Streams never go idle on their own: closing the hub ends them (each gets an `error` event), so Shutdown
 	// can drain the remaining connections (story NW-09).
-	server.RegisterOnShutdown(app.QuoteHub.Close)
+	server.RegisterOnShutdown(appInstance.QuoteHub.Close)
 
 	// Graceful shutdown (story NW-08): on SIGINT/SIGTERM stop accepting requests, let in-flight ones finish,
 	// then closeApp stops the background workers (the matching engine releases its leader lock) and the pool.
@@ -53,18 +75,20 @@ func main() {
 	case err := <-serveErr:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			_ = closeApp()
-			log.Fatal(err)
+			slog.Error("server error", "error", err)
+			os.Exit(1)
 		}
 	case <-ctx.Done():
-		log.Printf("shutting down")
+		slog.Info("shutting down (waiting for open requests)", "timeout", shutdownTimeout)
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
-			log.Printf("http shutdown: %v", err)
+			slog.Error("shutdown failed", "error", err)
 		}
 	}
 
 	if err := closeApp(); err != nil {
-		log.Fatal(err)
+		slog.Error("failed to close app", "error", err)
+		os.Exit(1)
 	}
 }

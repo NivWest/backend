@@ -202,6 +202,15 @@ type Registrar interface {
   - Every fill or cancellation executes inside its own database transaction with strict row locking order (`user` → `position` → `order` `FOR UPDATE`) and re-checks that the order remains `OPEN`. Fills racing cancellations serialize safely; whichever commits first wins, and the second sees `ErrOrderNotOpen`.
   - Order reservations are released as part of fill or rejection. If funds or shares are insufficient at fill time, the order transitions to `REJECTED` with a descriptive `reject_reason` and the reservation is freed.
 
+### 3.11. Observability: Structured Logs, Metrics, Tracing (story NW-19)
+- **Structured logging:** `log/slog` JSON/Text handler (`LOG_LEVEL=debug|info|warn|error`, `LOG_FORMAT=json|text`).
+  - Middleware generates or propagates `X-Request-ID`, writes one access line per request with `time, level, msg, request_id, method, route, status, duration_ms`.
+  - Redaction: sensitive values (e.g. `session_id` cookies, Authorization header tokens) are redacted from all log attributes.
+- **Prometheus metrics:** `GET /metrics` on the API port outside `/api/v1` (`internal/observability/metrics.go`):
+  - HTTP metrics: `http_request_duration_seconds_bucket{route, method, status}` (route is the template, bounded cardinality), `http_requests_in_flight`, standard Go metrics (`go_goroutines`).
+  - Domain metrics: `orders_filled_total{side, type}`, `llm_requests_total{feature, provider, status}`, `llm_tokens_total{feature, model, kind}`, `matching_engine_cycle_seconds`, `quote_hub_subscribers`, etc. Services instrument through interfaces without importing Prometheus directly.
+- **OpenTelemetry tracing:** Optional tracer provider configured when `OTEL_EXPORTER_OTLP_ENDPOINT` is non-empty.
+
 ---
 
 ## 4. Security & API Hygiene

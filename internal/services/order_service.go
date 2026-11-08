@@ -33,6 +33,8 @@ type OrderService struct {
 	sleep func(time.Duration)
 	// observer is told about every new fill (story NW-10: the equity snapshot); nil means nobody listens.
 	observer domain.FillObserver
+	// metrics is told about filled orders for Prometheus instrumentation (story NW-19).
+	metrics domain.OrderMetricsObserver
 }
 
 func NewOrderService(repo domain.OrderRepository, provider domain.MarketDataProvider) *OrderService {
@@ -53,6 +55,11 @@ func (s *OrderService) SetSleep(sleep func(time.Duration)) {
 // story NW-10). It must be called before the service is used.
 func (s *OrderService) SetFillObserver(o domain.FillObserver) {
 	s.observer = o
+}
+
+// SetMetricsObserver registers m to observe filled orders for metrics (story NW-19).
+func (s *OrderService) SetMetricsObserver(m domain.OrderMetricsObserver) {
+	s.metrics = m
 }
 
 // PlaceOrder validates and places an order for userID: a MARKET order is priced and executed at once, a LIMIT
@@ -131,6 +138,9 @@ func (s *OrderService) PlaceOrder(ctx context.Context, userID uint, idempotencyK
 	}
 	if s.observer != nil {
 		s.observer.OrderFilled(ctx, userID)
+	}
+	if s.metrics != nil {
+		s.metrics.ObserveOrderFilled(string(order.Side), string(order.Type))
 	}
 	return order, true, nil
 }

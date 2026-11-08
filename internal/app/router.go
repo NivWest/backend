@@ -24,6 +24,9 @@ func (a *App) Router(middleware ...gin.HandlerFunc) *gin.Engine {
 	if a.OpenAPIHandler != nil {
 		a.OpenAPIHandler.RegisterDocs(api)
 	}
+	if a.Metrics != nil {
+		engine.GET("/metrics", gin.WrapH(a.Metrics.Handler()))
+	}
 	return engine
 }
 

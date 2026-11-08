@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"backend/internal/config"
@@ -28,6 +28,7 @@ type AIGateway struct {
 	timeout time.Duration
 	prices  map[string]config.ModelPrice
 	now     func() time.Time
+	metrics domain.AIMetricsObserver
 }
 
 // NewAIGateway builds the gateway. budget <= 0 uses domain.DefaultAIDailyTokenBudget, timeout <= 0 means 60s.
@@ -53,6 +54,11 @@ func NewAIGateway(
 
 // Provider is the wrapped provider's name ("anthropic" or "fake").
 func (g *AIGateway) Provider() string { return g.llm.Name() }
+
+// SetMetricsObserver sets the observer for Prometheus metrics.
+func (g *AIGateway) SetMetricsObserver(m domain.AIMetricsObserver) {
+	g.metrics = m
+}
 
 // utcDay returns the start and end of the UTC day containing t, and its YYYY-MM-DD date.
 func utcDay(t time.Time) (from, to time.Time, date string) {
@@ -168,10 +174,21 @@ func (g *AIGateway) call(
 	}
 	// Record even when the caller went away: the tokens were spent.
 	if recErr := g.usage.Record(context.WithoutCancel(ctx), rec); recErr != nil {
-		log.Printf("[AI] failed to record usage for user_id=%d feature=%s: %v", userID, req.Feature, recErr)
+		slog.Error("failed to record AI usage", "user_id", userID, "feature", req.Feature, "error", recErr)
 	}
 	if resp.FallbackModel != "" {
-		log.Printf("[AI] refusal fallback served user_id=%d feature=%s by %s", userID, req.Feature, resp.FallbackModel)
+		slog.Info("refusal fallback served", "user_id", userID, "feature", req.Feature, "fallback_model", resp.FallbackModel)
+	}
+	if g.metrics != nil {
+		g.metrics.ObserveLLMCall(
+			string(req.Feature),
+			g.llm.Name(),
+			string(status),
+			latency,
+			resp.Usage.Input,
+			resp.Usage.Output,
+			rec.CostUSD.InexactFloat64(),
+		)
 	}
 	return resp, err
 }

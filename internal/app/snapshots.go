@@ -2,7 +2,7 @@ package app
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"time"
 )
 
@@ -38,11 +38,11 @@ func runSnapshotScheduler(ctx context.Context, t ticker, s snapshotter) {
 			}
 			n, err := s.SnapshotAll(ctx)
 			if err != nil {
-				log.Printf("equity snapshot round failed: %v", err)
+				slog.Error("equity snapshot round failed", "error", err)
 				continue
 			}
 			if n > 0 {
-				log.Printf("equity snapshots: wrote %d", n)
+				slog.Info("equity snapshots taken", "count", n)
 			}
 		}
 	}

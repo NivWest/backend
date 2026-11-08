@@ -12,18 +12,19 @@ import (
 )
 
 type Config struct {
-	Server      Server
-	Database    Database
-	Redis       Redis
-	Avanza      Avanza
-	Market      Market
-	RateLimit   RateLimit
-	Auth        Auth
-	LLM         LLM
-	Matching    Matching
-	Analytics   Analytics
-	Vault       Vault
-	Leaderboard Leaderboard
+	Server        Server
+	Database      Database
+	Redis         Redis
+	Avanza        Avanza
+	Market        Market
+	RateLimit     RateLimit
+	Auth          Auth
+	LLM           LLM
+	Matching      Matching
+	Analytics     Analytics
+	Vault         Vault
+	Leaderboard   Leaderboard
+	Observability Observability
 }
 
 // Matching configures the background matching engine for LIMIT and STOP orders (story NW-08).
@@ -149,7 +150,6 @@ type Vault struct {
 type Leaderboard struct {
 	RefreshInterval time.Duration
 }
-
 type RateLimit struct {
 	RequestsPerSecond int
 	Burst             int
@@ -169,6 +169,13 @@ type Auth struct {
 	GuestRateLimitPerMinute int
 }
 
+// Observability configures structured logging, metrics and optional OpenTelemetry tracing (story NW-19).
+type Observability struct {
+	LogLevel     string // LOG_LEVEL: debug|info|warn|error (default info)
+	LogFormat    string // LOG_FORMAT: json|text (default json)
+	OtelEndpoint string // OTEL_EXPORTER_OTLP_ENDPOINT: optional endpoint
+}
+
 func Load(envFile string) (*Config, error) {
 	if envFile != "" {
 		_ = godotenv.Load(envFile)
@@ -185,6 +192,16 @@ func Load(envFile string) (*Config, error) {
 	}
 
 	llmProvider, err := getChoice("LLM_PROVIDER", LLMProviderAnthropic, LLMProviderAnthropic, LLMProviderFake)
+	if err != nil {
+		return nil, err
+	}
+
+	logLevel, err := getChoice("LOG_LEVEL", "info", "debug", "info", "warn", "error")
+	if err != nil {
+		return nil, err
+	}
+
+	logFormat, err := getChoice("LOG_FORMAT", "json", "json", "text")
 	if err != nil {
 		return nil, err
 	}
@@ -287,6 +304,7 @@ func Load(envFile string) (*Config, error) {
 		Matching: Matching{
 			Interval: matchingInterval(getDuration("MATCHING_INTERVAL", DefaultMatchingInterval)),
 		},
+
 		Analytics: Analytics{
 			SnapshotInterval: getPositiveDuration("SNAPSHOT_INTERVAL", time.Hour),
 			RiskFreeRate:     getFloat("RISK_FREE_RATE", getFloat("VAULT_APY", 0.051)),
@@ -298,6 +316,12 @@ func Load(envFile string) (*Config, error) {
 
 		Leaderboard: Leaderboard{
 			RefreshInterval: getPositiveDuration("LEADERBOARD_REFRESH", 5*time.Minute),
+		},
+
+		Observability: Observability{
+			LogLevel:     logLevel,
+			LogFormat:    logFormat,
+			OtelEndpoint: strings.TrimSpace(getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "")),
 		},
 	}, nil
 }

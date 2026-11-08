@@ -3,7 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"backend/internal/domain"
@@ -57,10 +57,10 @@ func (p *GuestPurger) purgeAndLog(ctx context.Context) {
 	}
 	deleted, err := p.PurgeOnce(ctx)
 	if err != nil {
-		log.Printf("guest purge failed: %v", err)
+		slog.Error("guest purge failed", "error", err)
 		return
 	}
 	if deleted > 0 {
-		log.Printf("guest purge: deleted %d expired guest accounts", deleted)
+		slog.Info("guest accounts purged", "deleted", deleted)
 	}
 }
