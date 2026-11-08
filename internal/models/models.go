@@ -10,19 +10,25 @@ import (
 // Money columns are numeric(18,2) and quantities numeric(18,4), held as decimal.Decimal (story NW-04).
 
 type User struct {
-	ID       uint            `gorm:"primaryKey" json:"id"`
-	GoogleID string          `gorm:"uniqueIndex;not null" json:"google_id"`
-	Email    string          `gorm:"uniqueIndex;not null" json:"email"`
-	Name     string          `json:"name"`
-	Role     string          `gorm:"type:varchar(20);not null;default:member" json:"role"`
-	Balance  decimal.Decimal `gorm:"type:numeric(18,2);not null;default:100000.00" json:"balance"` // Simulator starting cash
+	ID               uint            `gorm:"primaryKey" json:"id"`
+	GoogleID         string          `gorm:"uniqueIndex;not null" json:"google_id"`
+	Email            string          `gorm:"uniqueIndex;not null" json:"email"`
+	Name             string          `json:"name"`
+	DisplayName      *string         `gorm:"type:varchar(20)" json:"display_name,omitempty"`
+	LeaderboardOptIn bool            `gorm:"not null;default:false" json:"leaderboard_opt_in"`
+	OptedInAt        *time.Time      `json:"opted_in_at,omitempty"`
+	Role             string          `gorm:"type:varchar(20);not null;default:member" json:"role"`
+	Balance          decimal.Decimal `gorm:"type:numeric(18,2);not null;default:100000.00" json:"balance"` // Simulator starting cash
 	// RealizedPnL accumulates sell total − avg_cost × quantity sold over every SELL (story NW-05).
 	RealizedPnL decimal.Decimal `gorm:"column:realized_pnl;type:numeric(18,2);not null;default:0" json:"realized_pnl"`
-	Positions   []Position      `json:"positions,omitempty"`
-	Favorites   []Stock         `gorm:"many2many:user_favorites;" json:"favorites,omitempty"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
-	DeletedAt   gorm.DeletedAt  `gorm:"index" json:"-"`
+	// ReservedCash is the sum of the reservations of the user's OPEN BUY orders (story NW-08). It is part of
+	// Balance; buying power is Balance − ReservedCash.
+	ReservedCash decimal.Decimal `gorm:"type:numeric(18,2);not null;default:0" json:"reserved_cash"`
+	Positions    []Position      `json:"positions,omitempty"`
+	Favorites    []Stock         `gorm:"many2many:user_favorites;" json:"favorites,omitempty"`
+	CreatedAt    time.Time       `json:"created_at"`
+	UpdatedAt    time.Time       `json:"updated_at"`
+	DeletedAt    gorm.DeletedAt  `gorm:"index" json:"-"`
 }
 
 type Session struct {
@@ -60,9 +66,12 @@ type Position struct {
 	AvgPrice decimal.Decimal `gorm:"type:numeric(18,2);not null" json:"avg_price"` // Average fill price, commission excluded
 	// AvgCost is the cost basis per share, buy commission included: (Σ BUY totals of the open lot) ÷ quantity.
 	// Selling leaves it unchanged (story NW-05). Kept at 8 decimals so avg_cost × quantity stays exact enough.
-	AvgCost   decimal.Decimal `gorm:"type:numeric(20,8);not null;default:0" json:"avg_cost"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	AvgCost decimal.Decimal `gorm:"type:numeric(20,8);not null;default:0" json:"avg_cost"`
+	// ReservedQuantity is held back by the user's OPEN SELL orders for this stock (story NW-08); at most
+	// Quantity. Only Quantity − ReservedQuantity can be sold.
+	ReservedQuantity decimal.Decimal `gorm:"type:numeric(18,4);not null;default:0" json:"reserved_quantity"`
+	CreatedAt        time.Time       `json:"created_at"`
+	UpdatedAt        time.Time       `json:"updated_at"`
 }
 
 // Transaction is the pre-NW-04 trade log. It is no longer written (orders live in Order) and is
@@ -83,22 +92,31 @@ type Transaction struct {
 // domain.OrderStatus values; market orders are written FILLED in the same DB transaction
 // that moves the cash and the position. IdempotencyKey is unique per user (NULL when the
 // request had no Idempotency-Key header), so concurrent retries collapse into one row.
+//
+// LIMIT and STOP orders (story NW-08) are written OPEN with FillPrice, Commission and Total at 0;
+// the matching engine fills them later. ReservedCash is what an OPEN BUY added to users.reserved_cash
+// (0 for SELL, whose reservation is Quantity on positions.reserved_quantity); it is kept after the order
+// leaves OPEN as a record of what was released.
 type Order struct {
-	ID             uint            `gorm:"primaryKey;index:idx_orders_user_created_id,priority:3" json:"id"`
-	UserID         uint            `gorm:"not null;index;uniqueIndex:idx_orders_user_idempotency_key,priority:1;index:idx_orders_user_created_id,priority:1;constraint:OnDelete:CASCADE;" json:"user_id"`
-	StockID        uint            `gorm:"not null;index;constraint:OnDelete:CASCADE;" json:"stock_id"`
-	Stock          Stock           `json:"stock,omitempty"`
-	Side           string          `gorm:"type:varchar(4);not null" json:"side"`
-	Type           string          `gorm:"type:varchar(10);not null;default:MARKET" json:"type"`
-	Status         string          `gorm:"type:varchar(10);not null" json:"status"`
-	Quantity       decimal.Decimal `gorm:"type:numeric(18,4);not null" json:"quantity"`
-	FillPrice      decimal.Decimal `gorm:"type:numeric(18,2);not null" json:"fill_price"`
-	Commission     decimal.Decimal `gorm:"type:numeric(18,2);not null" json:"commission"`
-	Total          decimal.Decimal `gorm:"type:numeric(18,2);not null" json:"total"`
-	IdempotencyKey *string         `gorm:"size:255;uniqueIndex:idx_orders_user_idempotency_key,priority:2" json:"-"`
-	CreatedAt      time.Time       `gorm:"index:idx_orders_user_created_id,priority:2" json:"created_at"` // Order history keyset (NW-05)
-	UpdatedAt      time.Time       `json:"updated_at"`
-	FilledAt       *time.Time      `json:"filled_at"`
+	ID             uint                `gorm:"primaryKey;index:idx_orders_user_created_id,priority:3" json:"id"`
+	UserID         uint                `gorm:"not null;index;uniqueIndex:idx_orders_user_idempotency_key,priority:1;index:idx_orders_user_created_id,priority:1;constraint:OnDelete:CASCADE;" json:"user_id"`
+	StockID        uint                `gorm:"not null;index;constraint:OnDelete:CASCADE;" json:"stock_id"`
+	Stock          Stock               `json:"stock,omitempty"`
+	Side           string              `gorm:"type:varchar(4);not null" json:"side"`
+	Type           string              `gorm:"type:varchar(10);not null;default:MARKET" json:"type"`
+	Status         string              `gorm:"type:varchar(10);not null" json:"status"`
+	Quantity       decimal.Decimal     `gorm:"type:numeric(18,4);not null" json:"quantity"`
+	FillPrice      decimal.Decimal     `gorm:"type:numeric(18,2);not null" json:"fill_price"`
+	Commission     decimal.Decimal     `gorm:"type:numeric(18,2);not null" json:"commission"`
+	Total          decimal.Decimal     `gorm:"type:numeric(18,2);not null" json:"total"`
+	LimitPrice     decimal.NullDecimal `gorm:"type:numeric(18,2)" json:"limit_price"`
+	StopPrice      decimal.NullDecimal `gorm:"type:numeric(18,2)" json:"stop_price"`
+	ReservedCash   decimal.Decimal     `gorm:"type:numeric(18,2);not null;default:0" json:"-"`
+	RejectReason   *string             `gorm:"size:255" json:"reject_reason"`
+	IdempotencyKey *string             `gorm:"size:255;uniqueIndex:idx_orders_user_idempotency_key,priority:2" json:"-"`
+	CreatedAt      time.Time           `gorm:"index:idx_orders_user_created_id,priority:2" json:"created_at"` // Order history keyset (NW-05)
+	UpdatedAt      time.Time           `json:"updated_at"`
+	FilledAt       *time.Time          `json:"filled_at"`
 }
 
 // Watchlist is a named list of stocks owned by one user (at most domain.MaxWatchlists per user). Names are
@@ -189,4 +207,42 @@ type KBChunk struct {
 	ContentHash  string    `gorm:"type:varchar(64);not null" json:"content_hash"`
 	CreatedAt    time.Time `gorm:"not null" json:"created_at"`
 	UpdatedAt    time.Time `gorm:"not null" json:"updated_at"`
+}
+
+// VaultAccount holds the user's idle cash parked in The Vault (story NW-11), earning risk-free daily APY.
+// user_id is unique so each user has at most one vault account.
+type VaultAccount struct {
+	ID                  uint            `gorm:"primaryKey" json:"id"`
+	UserID              uint            `gorm:"uniqueIndex;not null;constraint:OnDelete:CASCADE;" json:"user_id"`
+	Balance             decimal.Decimal `gorm:"type:numeric(20,8);not null;default:0" json:"balance"`
+	InterestEarnedTotal decimal.Decimal `gorm:"type:numeric(20,8);not null;default:0" json:"interest_earned_total"`
+	LastAccruedAt       time.Time       `gorm:"not null" json:"last_accrued_at"`
+	CreatedAt           time.Time       `json:"created_at"`
+	UpdatedAt           time.Time       `json:"updated_at"`
+}
+
+// VaultTransaction records a deposit or withdrawal in the vault (story NW-11).
+// Type is "DEPOSIT" or "WITHDRAWAL".
+type VaultTransaction struct {
+	ID        uint            `gorm:"primaryKey;index:idx_vault_tx_user_created,priority:3" json:"id"`
+	UserID    uint            `gorm:"not null;index:idx_vault_tx_user_created,priority:1;constraint:OnDelete:CASCADE;" json:"user_id"`
+	Type      string          `gorm:"type:varchar(20);not null" json:"type"`
+	Amount    decimal.Decimal `gorm:"type:numeric(18,2);not null" json:"amount"`
+	CreatedAt time.Time       `gorm:"index:idx_vault_tx_user_created,priority:2" json:"created_at"`
+}
+
+// LeaderboardEntry represents a materialized ranking on a metric (story NW-13).
+// Metric is "return" or "sharpe". Entries are rebuilt atomically per metric.
+type LeaderboardEntry struct {
+	ID             uint             `gorm:"primaryKey" json:"id"`
+	Metric         string           `gorm:"type:varchar(20);not null;index:idx_leaderboard_metric_rank,priority:1;uniqueIndex:idx_leaderboard_metric_user,priority:1" json:"metric"`
+	UserID         uint             `gorm:"not null;index;uniqueIndex:idx_leaderboard_metric_user,priority:2;constraint:OnDelete:CASCADE;" json:"user_id"`
+	Rank           int              `gorm:"not null;index:idx_leaderboard_metric_rank,priority:2" json:"rank"`
+	DisplayName    string           `gorm:"type:varchar(20);not null" json:"display_name"`
+	TotalReturnPct decimal.Decimal  `gorm:"type:numeric(10,2);not null" json:"total_return_pct"`
+	SharpeRatio    *decimal.Decimal `gorm:"type:numeric(10,2)" json:"sharpe_ratio"`
+	MaxDrawdownPct *decimal.Decimal `gorm:"type:numeric(10,2)" json:"max_drawdown_pct"`
+	OptedInAt      time.Time        `gorm:"not null" json:"opted_in_at"`
+	CreatedAt      time.Time        `json:"created_at"`
+	UpdatedAt      time.Time        `json:"updated_at"`
 }

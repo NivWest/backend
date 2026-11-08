@@ -22,18 +22,26 @@ import (
 )
 
 type App struct {
-	HealthHandler    *handlers.HealthHandler
-	OpenAPIHandler   *handlers.OpenAPIHandler
-	UserHandler      *handlers.UserHandler
-	MarketHandler    *handlers.MarketHandler
-	AuthHandler      *handlers.AuthHandler
-	PortfolioHandler *handlers.PortfolioHandler
-	OrderHandler     *handlers.OrderHandler
-	WatchlistHandler *handlers.WatchlistHandler
-	AIHandler        *handlers.AIHandler
-	AnalyticsHandler *handlers.AnalyticsHandler
-	LearnHandler     *handlers.LearnHandler
-	AuthRepo         domain.AuthRepository
+	HealthHandler  *handlers.HealthHandler
+	OpenAPIHandler *handlers.OpenAPIHandler
+	UserHandler    *handlers.UserHandler
+	MarketHandler  *handlers.MarketHandler
+	// MarketStreamHandler serves GET /market/stream (story NW-09) from QuoteHub.
+	MarketStreamHandler *handlers.MarketStreamHandler
+	AuthHandler         *handlers.AuthHandler
+	PortfolioHandler    *handlers.PortfolioHandler
+	OrderHandler        *handlers.OrderHandler
+	WatchlistHandler    *handlers.WatchlistHandler
+	AIHandler           *handlers.AIHandler
+	AnalyticsHandler    *handlers.AnalyticsHandler
+	LearnHandler        *handlers.LearnHandler
+	VaultHandler        *handlers.VaultHandler
+	LeaderboardHandler  *handlers.LeaderboardHandler
+	AuthRepo            domain.AuthRepository
+
+	// QuoteHub fans live quotes out to the streams. Close it on shutdown (cmd/api registers it with
+	// http.Server.RegisterOnShutdown) so open streams end and the server can drain.
+	QuoteHub *services.QuoteHub
 
 	// SimHandler is nil unless MARKET_DATA_PROVIDER=simulated and MARKET_SIM_CONTROL_ENABLED=true (dev/test only).
 	SimHandler *handlers.SimHandler
@@ -71,6 +79,16 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	provider, simHandler := newMarketProvider(warmCtx, cfg, httpClient)
 	marketHandler := handlers.NewMarketHandler(services.NewMarketService(provider))
 
+	// Live quotes (story NW-09): one poller per watched instrument, shared by every stream.
+	quoteHub := services.NewQuoteHub(provider, services.QuoteHubOptions{Interval: cfg.Market.StreamInterval})
+	marketStreamHandler := handlers.NewMarketStreamHandler(quoteHub, handlers.StreamConfig{
+		Heartbeat:    cfg.Market.StreamHeartbeat,
+		WriteTimeout: cfg.Server.WriteTimeout,
+		MaxPerIP:     cfg.Market.StreamMaxPerIP,
+	})
+	log.Printf("market stream: poll every %s, heartbeat %s, at most %d streams per IP",
+		cfg.Market.StreamInterval, cfg.Market.StreamHeartbeat, cfg.Market.StreamMaxPerIP)
+
 	portfolioRepo := repository.NewPortfolioRepository(db)
 	portfolioService := services.NewPortfolioService(portfolioRepo, provider, userRepo)
 	portfolioHandler := handlers.NewPortfolioHandler(portfolioService, authRepo)
@@ -86,12 +104,31 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	orderService.SetFillObserver(snapshotService)
 	orderHandler := handlers.NewOrderHandler(orderService, authRepo)
 
+	// The matching engine (story NW-08) fills LIMIT and STOP orders. Every replica runs the loop, but only the
+	// holder of the Postgres advisory lock runs cycles; the others retry every interval. It stops (and releases
+	// the lock) when closeApp cancels its context.
+	leaderLock, err := repository.NewAdvisoryLock(db, domain.MatchingEngineLockKey)
+	if err != nil {
+		cancelWarm()
+		return nil, nil, err
+	}
+	engine := services.NewMatchingEngine(repository.NewMatchingRepository(db), provider, leaderLock, time.Now, services.DefaultMatchingWorkers)
+	matchCtx, cancelMatch := context.WithCancel(context.Background())
+	matchDone := make(chan struct{})
+	go func() {
+		defer close(matchDone)
+		engine.Run(matchCtx, cfg.Matching.Interval)
+	}()
+	log.Printf("matching engine: every %s (leader election via pg_try_advisory_lock)", cfg.Matching.Interval)
+
 	watchlistRepo := repository.NewWatchlistRepository(db)
 	watchlistService := services.NewWatchlistService(watchlistRepo, provider)
 	watchlistHandler := handlers.NewWatchlistHandler(watchlistService, authRepo)
 
 	// Knowledge base (story NW-15): seed embedded articles into Postgres, expose search and article endpoints.
 	if err := knowledge.Seed(context.Background(), db); err != nil {
+		cancelMatch()
+		<-matchDone
 		cancelWarm()
 		return nil, nil, fmt.Errorf("seed knowledge base: %w", err)
 	}
@@ -106,6 +143,17 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	askService := services.NewAskService(gateway, knowledgeRepo)
 	aiHandler := handlers.NewAIHandler(briefService, gateway, askService, authRepo)
 
+	vaultRepo := repository.NewVaultRepository(db)
+	vaultService := services.NewVaultService(vaultRepo, userRepo, cfg.Vault.APY, time.Now)
+	vaultHandler := handlers.NewVaultHandler(vaultService, authRepo)
+
+	portfolioService.SetVault(vaultRepo, cfg.Vault.APY, time.Now)
+	snapshotService.SetVault(vaultRepo, cfg.Vault.APY)
+
+	leaderboardRepo := repository.NewLeaderboardRepository(db)
+	leaderboardService := services.NewLeaderboardService(leaderboardRepo, userRepo, analyticsService)
+	leaderboardHandler := handlers.NewLeaderboardHandler(leaderboardService, authRepo)
+
 	// The guest purger runs until closeApp cancels its context: once now, then every GuestPurgeInterval.
 	guestRepo := repository.NewGuestRepository(db)
 	purger := services.NewGuestPurger(guestRepo, domain.GuestRetention, time.Now)
@@ -116,7 +164,15 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	go runSnapshotScheduler(snapshotCtx, newTimeTicker(cfg.Analytics.SnapshotInterval), snapshotService)
 	log.Printf("equity snapshots every %s, risk-free rate %.4f", cfg.Analytics.SnapshotInterval, cfg.Analytics.RiskFreeRate)
 
+	leaderboardCtx, cancelLeaderboard := context.WithCancel(context.Background())
+	go runLeaderboardScheduler(leaderboardCtx, newTimeTicker(cfg.Leaderboard.RefreshInterval), leaderboardService, db)
+	log.Printf("leaderboard refresh every %s", cfg.Leaderboard.RefreshInterval)
+
 	closeApp := func() error {
+		quoteHub.Close()
+		cancelMatch()
+		<-matchDone // the engine releases its lock connection before the pool closes
+		cancelLeaderboard()
 		cancelSnapshots()
 		cancelPurge()
 		cancelWarm()
@@ -133,18 +189,22 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 			cfg.Market.Provider,
 			llm.Name(),
 		),
-		OpenAPIHandler:   handlers.NewOpenAPIHandler(api.OpenAPISpec),
-		UserHandler:      userHandler,
-		MarketHandler:    marketHandler,
-		SimHandler:       simHandler,
-		AuthHandler:      authHandler,
-		PortfolioHandler: portfolioHandler,
-		OrderHandler:     orderHandler,
-		WatchlistHandler: watchlistHandler,
-		AIHandler:        aiHandler,
-		AnalyticsHandler: analyticsHandler,
-		LearnHandler:     learnHandler,
-		AuthRepo:         authRepo,
+		OpenAPIHandler:      handlers.NewOpenAPIHandler(api.OpenAPISpec),
+		UserHandler:         userHandler,
+		MarketHandler:       marketHandler,
+		MarketStreamHandler: marketStreamHandler,
+		QuoteHub:            quoteHub,
+		SimHandler:          simHandler,
+		AuthHandler:         authHandler,
+		PortfolioHandler:    portfolioHandler,
+		OrderHandler:        orderHandler,
+		WatchlistHandler:    watchlistHandler,
+		AIHandler:           aiHandler,
+		AnalyticsHandler:    analyticsHandler,
+		LearnHandler:        learnHandler,
+		VaultHandler:        vaultHandler,
+		LeaderboardHandler:  leaderboardHandler,
+		AuthRepo:            authRepo,
 	}, closeApp, nil
 }
 

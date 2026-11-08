@@ -168,3 +168,19 @@ type MarketSimControl interface {
 type SimPriceRequest struct {
 	Price float64 `json:"price"`
 }
+
+// Live quotes (story NW-09).
+
+// MaxStreamIDs is the most orderbook ids one quote stream (GET /market/stream?ids=) may subscribe to.
+const MaxStreamIDs = 50
+
+// QuoteHub fans live quotes out to streaming clients. Implemented by services.QuoteHub: one poller per
+// instrument with at least one subscriber, shared by every subscriber of that instrument.
+type QuoteHub interface {
+	// Subscribe resolves ids (already validated: 1..MaxStreamIDs distinct, non-blank) and returns a channel that
+	// first carries the current quote of every id, then each changed quote. Unknown ids return
+	// ErrInstrumentNotFound and upstream failures wrap ErrMarketDataUnavailable, both before anything is
+	// subscribed. The subscription ends when ctx is done; the channel is closed then, or when the hub shuts down.
+	// A slow reader only loses older quotes of an instrument, never the latest one.
+	Subscribe(ctx context.Context, ids []string) (<-chan Quote, error)
+}

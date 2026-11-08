@@ -39,6 +39,7 @@ func (a *App) registrars() []Registrar {
 	add(a.HealthHandler == nil, a.HealthHandler)
 	add(a.OpenAPIHandler == nil, a.OpenAPIHandler)
 	add(a.MarketHandler == nil, a.MarketHandler)
+	add(a.MarketStreamHandler == nil, a.MarketStreamHandler)
 	add(a.UserHandler == nil, a.UserHandler)
 	add(a.AuthHandler == nil, a.AuthHandler)
 	add(a.PortfolioHandler == nil, a.PortfolioHandler)
@@ -47,6 +48,8 @@ func (a *App) registrars() []Registrar {
 	add(a.AIHandler == nil, a.AIHandler)
 	add(a.AnalyticsHandler == nil, a.AnalyticsHandler)
 	add(a.LearnHandler == nil, a.LearnHandler)
+	add(a.VaultHandler == nil, a.VaultHandler)
+	add(a.LeaderboardHandler == nil, a.LeaderboardHandler)
 	// SimHandler is nil unless MARKET_DATA_PROVIDER=simulated and MARKET_SIM_CONTROL_ENABLED=true.
 	add(a.SimHandler == nil, a.SimHandler)
 	return out

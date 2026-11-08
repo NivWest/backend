@@ -12,16 +12,31 @@ import (
 )
 
 type Config struct {
-	Server    Server
-	Database  Database
-	Redis     Redis
-	Avanza    Avanza
-	Market    Market
-	RateLimit RateLimit
-	Auth      Auth
-	LLM       LLM
-	Analytics Analytics
+	Server      Server
+	Database    Database
+	Redis       Redis
+	Avanza      Avanza
+	Market      Market
+	RateLimit   RateLimit
+	Auth        Auth
+	LLM         LLM
+	Matching    Matching
+	Analytics   Analytics
+	Vault       Vault
+	Leaderboard Leaderboard
 }
+
+// Matching configures the background matching engine for LIMIT and STOP orders (story NW-08).
+type Matching struct {
+	// Interval is how often the engine evaluates open orders (MATCHING_INTERVAL, default 1s, at least 100ms).
+	Interval time.Duration
+}
+
+// MinMatchingInterval is the shortest accepted MATCHING_INTERVAL; shorter or invalid values fall back to the default.
+const MinMatchingInterval = 100 * time.Millisecond
+
+// DefaultMatchingInterval is MATCHING_INTERVAL when it is unset or invalid.
+const DefaultMatchingInterval = time.Second
 
 type Server struct {
 	Host         string
@@ -62,6 +77,11 @@ const (
 type Market struct {
 	Provider          string
 	SimControlEnabled bool
+
+	// Live quote stream, GET /market/stream (story NW-09).
+	StreamInterval  time.Duration // MARKET_STREAM_INTERVAL: poll interval per instrument (default 2s)
+	StreamHeartbeat time.Duration // MARKET_STREAM_HEARTBEAT: `: ping` interval on idle streams (default 10s)
+	StreamMaxPerIP  int           // MARKET_STREAM_MAX_PER_IP: concurrent streams per client IP (default 5)
 }
 
 // LLM providers selectable via LLM_PROVIDER (story NW-14).
@@ -115,8 +135,19 @@ type Analytics struct {
 	// SnapshotInterval is how often every user with an order is snapshotted (SNAPSHOT_INTERVAL, default 1h;
 	// a non-positive or invalid value falls back to the default).
 	SnapshotInterval time.Duration
-	// RiskFreeRate is the annual risk-free rate of the Sharpe ratio as a fraction (RISK_FREE_RATE, default 0.02).
+	// RiskFreeRate is the annual risk-free rate of the Sharpe ratio as a fraction (RISK_FREE_RATE, default VAULT_APY).
 	RiskFreeRate float64
+}
+
+// Vault configures the risk-free yield vault (story NW-11).
+type Vault struct {
+	// APY is the annual percentage yield for the vault as a fraction (VAULT_APY, default 0.051).
+	APY float64
+}
+
+// Leaderboard configures periodic leaderboard materialization (story NW-13).
+type Leaderboard struct {
+	RefreshInterval time.Duration
 }
 
 type RateLimit struct {
@@ -213,6 +244,9 @@ func Load(envFile string) (*Config, error) {
 				"MARKET_SIM_CONTROL_ENABLED",
 				false,
 			),
+			StreamInterval:  getPositiveDuration("MARKET_STREAM_INTERVAL", 2*time.Second),
+			StreamHeartbeat: getPositiveDuration("MARKET_STREAM_HEARTBEAT", 10*time.Second),
+			StreamMaxPerIP:  getPositiveInt("MARKET_STREAM_MAX_PER_IP", 5),
 		},
 
 		RateLimit: RateLimit{
@@ -249,9 +283,21 @@ func Load(envFile string) (*Config, error) {
 			AnthropicBaseURL: strings.TrimSpace(getEnv("ANTHROPIC_BASE_URL", "")),
 			Prices:           DefaultModelPrices(),
 		},
+
+		Matching: Matching{
+			Interval: matchingInterval(getDuration("MATCHING_INTERVAL", DefaultMatchingInterval)),
+		},
 		Analytics: Analytics{
 			SnapshotInterval: getPositiveDuration("SNAPSHOT_INTERVAL", time.Hour),
-			RiskFreeRate:     getFloat("RISK_FREE_RATE", 0.02),
+			RiskFreeRate:     getFloat("RISK_FREE_RATE", getFloat("VAULT_APY", 0.051)),
+		},
+
+		Vault: Vault{
+			APY: getFloat("VAULT_APY", 0.051),
+		},
+
+		Leaderboard: Leaderboard{
+			RefreshInterval: getPositiveDuration("LEADERBOARD_REFRESH", 5*time.Minute),
 		},
 	}, nil
 }
@@ -278,6 +324,14 @@ func getChoice(key, defaultValue string, allowed ...string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("invalid %s %q: allowed values are %q", key, value, allowed)
+}
+
+// matchingInterval rejects intervals below MinMatchingInterval (a busy loop) in favour of the default.
+func matchingInterval(d time.Duration) time.Duration {
+	if d < MinMatchingInterval {
+		return DefaultMatchingInterval
+	}
+	return d
 }
 
 func getEnv(key, defaultValue string) string {
@@ -341,10 +395,18 @@ func getDuration(
 	return result
 }
 
-// getPositiveDuration is getDuration that also falls back to defaultValue for zero or negative durations.
+// getPositiveDuration is getDuration, but a zero or negative value also falls back to the default.
 func getPositiveDuration(key string, defaultValue time.Duration) time.Duration {
 	if d := getDuration(key, defaultValue); d > 0 {
 		return d
+	}
+	return defaultValue
+}
+
+// getPositiveInt is getInt, but a zero or negative value also falls back to the default.
+func getPositiveInt(key string, defaultValue int) int {
+	if n := getInt(key, defaultValue); n > 0 {
+		return n
 	}
 	return defaultValue
 }

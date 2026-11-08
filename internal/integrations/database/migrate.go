@@ -32,12 +32,20 @@ func Migrate(db *gorm.DB) error {
 		&models.EquitySnapshot{},
 		&models.KBArticle{},
 		&models.KBChunk{},
+		&models.VaultAccount{},
+		&models.VaultTransaction{},
+		&models.LeaderboardEntry{},
 	); err != nil {
 		return fmt.Errorf("auto migrate: %w", err)
 	}
 
 	if err := migrateKBChunksSearch(db); err != nil {
 		return err
+	}
+
+	// Case-insensitive unique index for display_name (story NW-13).
+	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_display_name_lower ON users (lower(display_name)) WHERE display_name IS NOT NULL`).Error; err != nil {
+		return fmt.Errorf("create idx_users_display_name_lower: %w", err)
 	}
 
 	// AutoMigrate retypes columns whose type differs (users.balance and positions.* move from
@@ -50,6 +58,12 @@ func Migrate(db *gorm.DB) error {
 
 	if err := backfillAvgCost(db); err != nil {
 		return err
+	}
+
+	// The matching engine (story NW-08) reads every OPEN order each cycle; a partial index keeps that scan
+	// proportional to the open orders, not to the whole order log.
+	if err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_open ON orders (stock_id, id) WHERE status = 'OPEN'`).Error; err != nil {
+		return fmt.Errorf("orders open index: %w", err)
 	}
 
 	return nil

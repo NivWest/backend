@@ -28,7 +28,7 @@ tags:
   - name: Simulated market (dev/test)
     description: Price pinning for the simulated market. Mounted only with MARKET_SIM_CONTROL_ENABLED=true; never in production.
   - name: Orders
-    description: Market order execution (NW-04) and order history (NW-05).
+    description: Market orders (NW-04), order history (NW-05), and good-till-cancelled limit and stop orders filled by a background matching engine (NW-08).
   - name: Watchlists
     description: Up to 10 named watchlists per user with live prices (story NW-06).
   - name: Portfolio
@@ -39,6 +39,10 @@ tags:
       deterministic fake provider (LLM_PROVIDER=fake). AI output is educational, never financial advice.
   - name: Learn
     description: Knowledge base articles and search over trading concepts (story NW-15).
+  - name: Vault
+    description: The Vault risk-free yield, opportunity cost, deposits and withdrawals (story NW-11).
+  - name: Leaderboard
+    description: Risk-adjusted and total return trader rankings (story NW-13).
 
 components:
   securitySchemes:
@@ -73,6 +77,9 @@ components:
         - AI_BUDGET_EXCEEDED
         - AI_REFUSED
         - AI_UNAVAILABLE
+        - ORDER_NOT_FOUND
+        - ORDER_NOT_OPEN
+        - INSUFFICIENT_VAULT_BALANCE
 
     Error:
       type: object
@@ -92,7 +99,7 @@ components:
     Profile:
       type: object
       description: The signed-in user. Never exposes google_id.
-      required: [id, name, email, role, balance, is_guest]
+      required: [id, name, email, role, balance, is_guest, leaderboard_opt_in]
       properties:
         id:
           type: integer
@@ -111,6 +118,13 @@ components:
         is_guest:
           type: boolean
           description: True when role is guest.
+        display_name:
+          type: [string, "null"]
+          description: Pseudonymous handle for the leaderboard.
+          examples: [bull_42]
+        leaderboard_opt_in:
+          type: boolean
+          description: True when opted in to the public leaderboard.
 
     Features:
       type: object
@@ -294,13 +308,17 @@ components:
 
     OrderType:
       type: string
-      enum: [MARKET]
-      description: Only market orders until NW-08.
+      enum: [MARKET, LIMIT, STOP]
+      description: |
+        MARKET executes immediately. LIMIT and STOP are good-till-cancelled pending orders (story NW-08): they start
+        OPEN and the matching engine fills them once the quote reaches their price (see OrderRequest).
 
     OrderStatus:
       type: string
       enum: [OPEN, FILLED, CANCELLED, REJECTED]
-      description: Market orders are always FILLED; the other states are reserved for pending orders (NW-08).
+      description: |
+        Market orders are always FILLED. A LIMIT or STOP order starts OPEN and moves exactly once, to FILLED (the
+        matching engine), CANCELLED (DELETE /orders/{id}) or REJECTED (not enough buying power at fill time).
 
     OrderRequest:
       type: object
@@ -320,18 +338,47 @@ components:
         type:
           $ref: "#/components/schemas/OrderType"
           description: Defaults to MARKET.
+        limit_price:
+          type: number
+          exclusiveMinimum: 0
+          description: Required for (and only allowed on) LIMIT orders. SEK, at most 2 decimals.
+          examples: [95]
+        stop_price:
+          type: number
+          exclusiveMinimum: 0
+          description: Required for (and only allowed on) STOP orders. SEK, at most 2 decimals.
+          examples: [90]
+      description: |
+        A market order executes at once. LIMIT and STOP orders are good-till-cancelled and start OPEN.
+
+        Reservations at placement (money rounded half-up to 2 decimals; commission = max(1.00, 0.25% × gross)):
+        - BUY LIMIT reserves quantity × limit_price + commission(quantity × limit_price);
+        - BUY STOP reserves the same with round2(stop_price × 1.05) in place of limit_price;
+        - SELL orders reserve the shares.
+        buying_power = cash − reserved_cash and available shares = quantity − reserved_quantity; every order,
+        market orders included, must fit them (422 INSUFFICIENT_FUNDS / INSUFFICIENT_SHARES otherwise).
+
+        The matching engine checks open orders about once a second and fills them with the market pricing rules
+        (see Order) when:
+        - BUY LIMIT: ask ≤ limit_price (fills at the ask);
+        - SELL LIMIT: bid ≥ limit_price (fills at the bid);
+        - SELL STOP: bid ≤ stop_price (fills at the bid);
+        - BUY STOP: ask ≥ stop_price (fills at the ask).
+        When the cash outside other reservations no longer covers the total at fill time, the order is REJECTED
+        with a reject_reason and its reservation is released.
 
     Order:
       type: object
       description: |
-        An executed order. Pricing (all money in SEK, rounded half-up to 2 decimals):
+        An order and, once FILLED, its fill. Pricing (all money in SEK, rounded half-up to 2 decimals):
         - base price = ask for BUY, bid for SELL;
         - quantity > 100 applies 0.5% slippage against the trader (BUY × 1.005, SELL × 0.995);
         - fill_price = base price (after slippage) rounded to 2 decimals, before anything else;
         - gross = fill_price × quantity; commission = max(1.00, 0.25% × gross);
         - total = gross + commission (BUY, debited) or gross − commission (SELL, credited).
-        Execution waits a simulated 50–500 ms before the price is read.
-      required: [id, orderbook_id, symbol, name, side, type, status, quantity, fill_price, commission, total, created_at, filled_at]
+        A market order waits a simulated 50–500 ms before the price is read. fill_price, commission and total are
+        null unless status is FILLED.
+      required: [id, orderbook_id, symbol, name, side, type, status, quantity, limit_price, stop_price, fill_price, commission, total, reject_reason, created_at, filled_at]
       properties:
         id:
           type: integer
@@ -351,15 +398,24 @@ components:
         quantity:
           type: number
           description: Up to 4 decimals.
+        limit_price:
+          type: [number, "null"]
+          description: The LIMIT order's price in SEK (2 decimals); null for other types.
+        stop_price:
+          type: [number, "null"]
+          description: The STOP order's trigger price in SEK (2 decimals); null for other types.
         fill_price:
-          type: number
-          description: Price per share in SEK, 2 decimals.
+          type: [number, "null"]
+          description: Price per share in SEK, 2 decimals. null unless FILLED.
         commission:
-          type: number
-          description: SEK, 2 decimals.
+          type: [number, "null"]
+          description: SEK, 2 decimals. null unless FILLED.
         total:
-          type: number
-          description: Cash debited (BUY) or credited (SELL) in SEK, 2 decimals.
+          type: [number, "null"]
+          description: Cash debited (BUY) or credited (SELL) in SEK, 2 decimals. null unless FILLED.
+        reject_reason:
+          type: [string, "null"]
+          description: Why the matching engine rejected the order; null unless REJECTED.
         created_at:
           type: string
           format: date-time
@@ -474,7 +530,7 @@ components:
         - market_value = last_price × quantity; unrealized_pnl = market_value − avg_cost × quantity;
         - unrealized_pnl_percent = unrealized_pnl / (avg_cost × quantity) × 100;
         - weight = market_value / holdings_value × 100 (0 when holdings_value is 0).
-      required: [orderbook_id, symbol, name, quantity, avg_cost, last_price, market_value, unrealized_pnl, unrealized_pnl_percent, day_change_percent, weight]
+      required: [orderbook_id, symbol, name, quantity, avg_cost, last_price, market_value, unrealized_pnl, unrealized_pnl_percent, day_change_percent, weight, reserved_quantity]
       properties:
         orderbook_id: { type: string }
         symbol: { type: string }
@@ -503,21 +559,29 @@ components:
         weight:
           type: number
           description: Percent of holdings_value, 2 decimals.
+        reserved_quantity:
+          type: number
+          description: Shares held back by OPEN SELL orders (up to 4 decimals); quantity − reserved_quantity can be sold.
 
     Portfolio:
       type: object
       description: |
         The signed-in user's portfolio. Money in SEK, 2 decimals.
-        - holdings_value = Σ positions.market_value; total_equity = cash + holdings_value;
+        - holdings_value = Σ positions.market_value; total_equity = cash + holdings_value + vault_value;
         - unrealized_pnl = Σ positions.unrealized_pnl;
-        - realized_pnl accumulates over every SELL: sell total (net proceeds) − avg_cost × quantity sold.
+        - realized_pnl accumulates over every SELL: sell total (net proceeds) − avg_cost × quantity sold;
+        - reserved_cash = Σ reservations of OPEN BUY orders (still part of cash); buying_power = cash − reserved_cash;
+        - vault_value is the balance currently in The Vault (story NW-11).
         positions are sorted by market_value desc (largest holding first), then orderbook_id asc.
         top_movers is at most 5 positions sorted by day_change_percent desc, then orderbook_id asc.
         Both arrays are empty (never null) without positions.
-      required: [cash, holdings_value, total_equity, unrealized_pnl, realized_pnl, positions, top_movers]
+      required: [cash, reserved_cash, buying_power, holdings_value, vault_value, total_equity, unrealized_pnl, realized_pnl, positions, top_movers]
       properties:
         cash: { type: number }
+        reserved_cash: { type: number }
+        buying_power: { type: number }
         holdings_value: { type: number }
+        vault_value: { type: number, description: "Balance currently in the vault (story NW-11)." }
         total_equity: { type: number }
         unrealized_pnl: { type: number }
         realized_pnl: { type: number }
@@ -527,99 +591,6 @@ components:
         top_movers:
           type: array
           items: { $ref: "#/components/schemas/PortfolioPosition" }
-
-    HistoryRange:
-      type: string
-      enum: ["1d", "1w", "1m", all]
-      description: |
-        Window of GET /portfolio/history, ending now: 1d = the last 24 hours, raw snapshots; 1w = the last 7 days and
-        1m = the last 30 days, bucketed hourly (the last snapshot of each UTC hour); all = every snapshot, bucketed
-        daily (the last snapshot of each UTC day).
-
-    EquityPoint:
-      type: object
-      description: One equity snapshot (cash + holdings at the last price + vault), SEK with 2 decimals.
-      required: [t, equity]
-      properties:
-        t:
-          type: string
-          format: date-time
-          description: When the snapshot was taken (RFC 3339, UTC).
-        equity:
-          type: number
-          description: Total equity in SEK, 2 decimals.
-
-    EquityHistory:
-      type: object
-      description: |
-        The signed-in user's equity over the requested range, oldest first. Snapshots are taken after every fill and
-        every SNAPSHOT_INTERVAL (default 1h) for users with at least one order, so a user without orders has no points.
-      required: [range, points]
-      properties:
-        range: { $ref: "#/components/schemas/HistoryRange" }
-        points:
-          type: array
-          items: { $ref: "#/components/schemas/EquityPoint" }
-          description: Oldest first; empty (never null) when there are no snapshots in the range.
-
-    AllocationSlice:
-      type: object
-      description: |
-        One slice of the allocation: an open position (label = symbol) or the cash (label "Cash", orderbook_id null).
-        weight = value / total_equity × 100.
-      required: [label, orderbook_id, value, weight]
-      properties:
-        label:
-          type: string
-          description: The instrument's symbol, or "Cash".
-        orderbook_id:
-          type: [string, "null"]
-          description: The position's orderbook id; null for the cash slice.
-        value:
-          type: number
-          description: Market value at the last price (cash itself for the cash slice), SEK with 2 decimals.
-        weight:
-          type: number
-          description: Percent of total equity, 2 decimals. The weights of all slices sum to exactly 100 (the rounding remainder goes to the largest slice); all 0 when total equity is 0.
-
-    PortfolioAnalytics:
-      type: object
-      description: |
-        Risk-adjusted performance of the signed-in user. Computed from the daily series (the last equity snapshot of
-        each UTC day, oldest first) with daily returns r_d = equity_d / equity_(d-1) − 1:
-        - total_return_pct = (total_equity / 100000 − 1) × 100, from the live portfolio and the 100,000 SEK start;
-        - volatility_annualized_pct = stdev(r_d) × √252 × 100 (sample standard deviation, n − 1);
-        - sharpe_ratio = (mean(r_d) − rf / 252) / stdev(r_d) × √252 with rf = RISK_FREE_RATE (default 0.02);
-          null also when stdev(r_d) is 0;
-        - max_drawdown_pct = the largest peak-to-trough decline of the daily equity, as a negative percentage
-          (0 when equity never fell).
-        Volatility, Sharpe and drawdown need at least 5 daily returns (data_points ≥ 5); below that they are null and
-        sufficient_data is false. Percentages and the ratio are rounded half-up to 2 decimals.
-      required: [total_return_pct, volatility_annualized_pct, sharpe_ratio, max_drawdown_pct, sufficient_data, data_points, allocation]
-      properties:
-        total_return_pct:
-          type: number
-          description: "Percent, 2 decimals (1.25 means +1.25%)."
-        volatility_annualized_pct:
-          type: [number, "null"]
-          description: Annualized volatility in percent, 2 decimals; null without sufficient data.
-        sharpe_ratio:
-          type: [number, "null"]
-          description: Annualized Sharpe ratio, 2 decimals; null without sufficient data or when volatility is 0.
-        max_drawdown_pct:
-          type: [number, "null"]
-          description: Largest peak-to-trough decline in percent (≤ 0), 2 decimals; null without sufficient data.
-        sufficient_data:
-          type: boolean
-          description: True when data_points ≥ 5.
-        data_points:
-          type: integer
-          minimum: 0
-          description: Number of daily returns in the daily series (days with a snapshot − 1, never below 0).
-        allocation:
-          type: array
-          items: { $ref: "#/components/schemas/AllocationSlice" }
-          description: Positions by value desc (then orderbook id asc), then the cash slice, which is always present.
 
     AIFeature:
       type: string
@@ -731,6 +702,209 @@ components:
         by_feature:
           type: array
           items: { $ref: "#/components/schemas/AIFeatureUsage" }
+
+    HistoryRange:
+      type: string
+      enum: ["1d", "1w", "1m", all]
+      description: |
+        Window of GET /portfolio/history, ending now: 1d = the last 24 hours, raw snapshots; 1w = the last 7 days and
+        1m = the last 30 days, bucketed hourly (the last snapshot of each UTC hour); all = every snapshot, bucketed
+        daily (the last snapshot of each UTC day).
+
+    EquityPoint:
+      type: object
+      description: One equity snapshot (cash + holdings at the last price + vault), SEK with 2 decimals.
+      required: [t, equity]
+      properties:
+        t:
+          type: string
+          format: date-time
+          description: When the snapshot was taken (RFC 3339, UTC).
+        equity:
+          type: number
+          description: Total equity in SEK, 2 decimals.
+
+    EquityHistory:
+      type: object
+      description: |
+        The signed-in user's equity over the requested range, oldest first. Snapshots are taken after every fill and
+        every SNAPSHOT_INTERVAL (default 1h) for users with at least one order, so a user without orders has no points.
+      required: [range, points]
+      properties:
+        range: { $ref: "#/components/schemas/HistoryRange" }
+        points:
+          type: array
+          items: { $ref: "#/components/schemas/EquityPoint" }
+          description: Oldest first; empty (never null) when there are no snapshots in the range.
+
+    AllocationSlice:
+      type: object
+      description: |
+        One slice of the allocation: an open position (label = symbol) or the cash (label "Cash", orderbook_id null).
+        weight = value / total_equity × 100.
+      required: [label, orderbook_id, value, weight]
+      properties:
+        label:
+          type: string
+          description: The instrument's symbol, or "Cash".
+        orderbook_id:
+          type: [string, "null"]
+          description: The position's orderbook id; null for the cash slice.
+        value:
+          type: number
+          description: Market value at the last price (cash itself for the cash slice), SEK with 2 decimals.
+        weight:
+          type: number
+          description: Percent of total equity, 2 decimals. The weights of all slices sum to exactly 100 (the rounding remainder goes to the largest slice); all 0 when total equity is 0.
+
+    PortfolioAnalytics:
+      type: object
+      description: |
+        Risk-adjusted performance of the signed-in user. Computed from the daily series (the last equity snapshot of
+        each UTC day, oldest first) with daily returns r_d = equity_d / equity_(d-1) − 1:
+        - total_return_pct = (total_equity / 100000 − 1) × 100, from the live portfolio and the 100,000 SEK start;
+        - volatility_annualized_pct = stdev(r_d) × √252 × 100 (sample standard deviation, n − 1);
+        - sharpe_ratio = (mean(r_d) − rf / 252) / stdev(r_d) × √252 with rf = RISK_FREE_RATE (default 0.02);
+          null also when stdev(r_d) is 0;
+        - max_drawdown_pct = the largest peak-to-trough decline of the daily equity, as a negative percentage
+          (0 when equity never fell).
+        Volatility, Sharpe and drawdown need at least 5 daily returns (data_points ≥ 5); below that they are null and
+        sufficient_data is false. Percentages and the ratio are rounded half-up to 2 decimals.
+      required: [total_return_pct, volatility_annualized_pct, sharpe_ratio, max_drawdown_pct, sufficient_data, data_points, allocation]
+      properties:
+        total_return_pct:
+          type: number
+          description: "Percent, 2 decimals (1.25 means +1.25%)."
+        volatility_annualized_pct:
+          type: [number, "null"]
+          description: Annualized volatility in percent, 2 decimals; null without sufficient data.
+        sharpe_ratio:
+          type: [number, "null"]
+          description: Annualized Sharpe ratio, 2 decimals; null without sufficient data or when volatility is 0.
+        max_drawdown_pct:
+          type: [number, "null"]
+          description: Largest peak-to-trough decline in percent (≤ 0), 2 decimals; null without sufficient data.
+        sufficient_data:
+          type: boolean
+          description: True when data_points ≥ 5.
+        data_points:
+          type: integer
+          minimum: 0
+          description: Number of daily returns in the daily series (days with a snapshot − 1, never below 0).
+        allocation:
+          type: array
+          items: { $ref: "#/components/schemas/AllocationSlice" }
+          description: Positions by value desc (then orderbook id asc), then the cash slice, which is always present.
+
+    Vault:
+      type: object
+      description: The signed-in user's vault status and risk-free yield.
+      required: [balance, apy, interest_earned_total, projected_monthly_interest_on_idle_cash]
+      properties:
+        balance:
+          type: number
+          description: Current balance in the vault in SEK, 2 decimals.
+        apy:
+          type: number
+          description: Annual percentage yield as a fraction (e.g. 0.051).
+        interest_earned_total:
+          type: number
+          description: Total accrued interest earned in SEK, 2 decimals.
+        projected_monthly_interest_on_idle_cash:
+          type: number
+          description: Projected 30-day interest on uninvested cash (idle cash × APY × 30 / 365) in SEK, 2 decimals.
+
+    VaultTransferRequest:
+      type: object
+      required: [amount]
+      properties:
+        amount:
+          type: number
+          description: Amount in SEK, positive, at most 2 decimal places.
+
+    VaultTransaction:
+      type: object
+      required: [id, type, amount, created_at]
+      properties:
+        id:
+          type: integer
+        type:
+          type: string
+          enum: [DEPOSIT, WITHDRAWAL]
+        amount:
+          type: number
+          description: Amount in SEK, 2 decimals.
+        created_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC.
+
+    VaultTransactionListResponse:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/VaultTransaction" }
+          description: Vault transactions, newest first.
+        next_cursor:
+          type: [string, "null"]
+          description: Kept for list pagination convention; always null for now.
+
+    UpdateProfileRequest:
+      type: object
+      description: Fields to update on the user profile (story NW-13).
+      properties:
+        display_name:
+          type: string
+          minLength: 3
+          maxLength: 20
+          pattern: '^[A-Za-z0-9_-]{3,20}$'
+          description: Unique pseudonymous handle, 3–20 characters [A-Za-z0-9_-].
+          example: bull_42
+        leaderboard_opt_in:
+          type: boolean
+          description: Whether to appear on public leaderboards.
+
+    LeaderboardMetric:
+      type: string
+      enum: [return, sharpe]
+      description: Ranking metric for the leaderboard.
+
+    LeaderboardEntry:
+      type: object
+      description: One ranked leaderboard entry (story NW-13). Exposes no internal ID, email or balance.
+      required: [rank, display_name, total_return_pct, sharpe_ratio, max_drawdown_pct, is_me]
+      properties:
+        rank:
+          type: integer
+          minimum: 1
+          description: Rank (1-based). Ties broken by earlier opted_in_at.
+        display_name:
+          type: string
+          description: Unique pseudonymous handle.
+        total_return_pct:
+          type: number
+          description: Total return in percent, 2 decimals.
+        sharpe_ratio:
+          type: [number, "null"]
+          description: Annualized Sharpe ratio, 2 decimals (null if insufficient data).
+        max_drawdown_pct:
+          type: [number, "null"]
+          description: Maximum drawdown in percent, 2 decimals (null if insufficient data).
+        is_me:
+          type: boolean
+          description: True when this entry belongs to the caller.
+
+    LeaderboardPage:
+      type: object
+      description: A page of ranked leaderboard entries.
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/LeaderboardEntry" }
+          description: Leaderboard entries ordered by rank. The caller's own entry is appended if outside the page.
 
     ArticleSummary:
       type: object
@@ -920,6 +1094,18 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
           example: { error: "the AI service is unavailable, please try again later", code: AI_UNAVAILABLE }
+    OrderNotFound:
+      description: No order with this id belongs to the signed-in user (another user's order is reported the same way).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: "order not found", code: ORDER_NOT_FOUND }
+    OrderIDValidationError:
+      description: The order id is not a positive integer.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: "order id must be a positive integer", code: VALIDATION_ERROR }
     ArticleNotFound:
       description: No article exists for the requested slug (story NW-15).
       content:
@@ -935,6 +1121,11 @@ components:
       schema: { type: string, minLength: 1 }
       examples:
         slippage: { value: slippage }
+    OrderID:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
     OrderbookID:
       name: orderbook_id
       in: path
@@ -1084,6 +1275,37 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthenticated"
 
+  /me:
+    patch:
+      summary: Update the signed-in user's profile
+      description: |
+        Updates the user's pseudonymous display name and/or leaderboard opt-in status (story NW-13).
+        Display name must be 3–20 characters [A-Za-z0-9_-] and unique (case-insensitive).
+      operationId: updateProfile
+      tags: [User]
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateProfileRequest" }
+      responses:
+        "200":
+          description: Updated profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Profile" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "409":
+          description: Display name already taken (case-insensitive).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "display name already taken", code: CONFLICT }
+
   /admin/users/{id}:
     delete:
       summary: Delete a user (admin only)
@@ -1214,6 +1436,74 @@ paths:
         "502":
           $ref: "#/components/responses/MarketDataUnavailable"
 
+  # Live quotes (story NW-09). Public, Server-Sent Events. One upstream poll per instrument is shared by every stream.
+  /market/stream:
+    get:
+      summary: Live quotes over Server-Sent Events
+      description: |
+        Streams live quotes for up to 50 instruments as `text/event-stream`. Every request parameter is validated and
+        every id is resolved **before** the stream starts, so a bad request gets a normal JSON error instead.
+
+        Events (each `data` line is one JSON document):
+
+        - `event: quote`: `data` is a `Quote` (same schema as `GET /market/instruments/{orderbook_id}/quote`). On
+          connect the stream sends the current quote of every requested id at once; afterwards it sends a quote only
+          when it changed (last, bid, ask or change_percent). The server polls the provider once per instrument every
+          `MARKET_STREAM_INTERVAL` (backend default 2s, compose 1s), shared by all streams watching it.
+        - `event: error`: `data` is an `Error`. Sent just before the server ends the stream (e.g. on shutdown); the
+          client should reconnect.
+        - `: ping` comment lines every `MARKET_STREAM_HEARTBEAT` (default 10s) keep idle connections open.
+
+        The first message is `retry: 3000` (EventSource reconnect delay in ms). Responses carry
+        `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no` so proxies don't buffer them.
+        Connecting counts as one request against the shared per-IP `/market` rate limit, and an IP can hold at most
+        `MARKET_STREAM_MAX_PER_IP` (default 5) streams at the same time. A slow client never blocks others: per
+        instrument it only keeps the latest undelivered quote.
+      operationId: streamQuotes
+      tags: ["Market data"]
+      security: []
+      parameters:
+        - name: ids
+          in: query
+          required: true
+          description: |
+            Comma-separated orderbook ids, 1 to 50 entries. Entries are trimmed, blank entries are ignored and
+            duplicates are streamed once.
+          schema: { type: string, minLength: 1 }
+          example: SIM-FJRD,SIM-NVE
+      responses:
+        "200":
+          description: The event stream. It stays open until the client disconnects or the server shuts down.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: "Server-Sent Events: `quote` (data: Quote), `error` (data: Error) and `: ping` comments."
+              example: |
+                retry: 3000
+
+                event: quote
+                data: {"orderbook_id":"SIM-FJRD","symbol":"FJRD","last":123.45,"bid":123.33,"ask":123.57,"change_percent":1.25,"currency":"SEK","updated_at":"2026-11-08T09:41:00Z"}
+
+                : ping
+
+        "400":
+          description: "`ids` is missing, has no non-blank entry, or has more than 50 entries."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "ids must list at most 50 orderbook ids", code: VALIDATION_ERROR }
+        "404":
+          $ref: "#/components/responses/InstrumentNotFound"
+        "429":
+          description: Over the per-IP `/market` rate limit, or this IP already holds `MARKET_STREAM_MAX_PER_IP` open streams.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "too many open streams from this address", code: RATE_LIMITED }
+        "502":
+          $ref: "#/components/responses/MarketDataUnavailable"
+
   # Simulated market control (story NW-03). DEV/TEST ONLY: the routes exist only when MARKET_DATA_PROVIDER=simulated
   # and MARKET_SIM_CONTROL_ENABLED=true (otherwise 404); no session needed, no rate limit. Pins are global and in memory.
   /sim/instruments/{orderbook_id}/price:
@@ -1272,7 +1562,17 @@ paths:
           in: query
           required: false
           schema: { type: string, minLength: 1 }
-          description: next_cursor of the previous page.
+          description: next_cursor of the previous page. Send the same status filter on every page.
+        - name: status
+          in: query
+          required: false
+          style: form
+          explode: false
+          schema:
+            type: array
+            minItems: 1
+            items: { $ref: "#/components/schemas/OrderStatus" }
+          description: Only orders in one of these statuses, comma-separated (e.g. `OPEN`, or `FILLED,CANCELLED,REJECTED`).
       responses:
         "200":
           description: One page of orders.
@@ -1289,14 +1589,17 @@ paths:
                     type: MARKET
                     status: FILLED
                     quantity: 5
+                    limit_price: null
+                    stop_price: null
                     fill_price: 109.89
                     commission: 1.37
                     total: 548.08
+                    reject_reason: null
                     created_at: "2026-10-26T09:42:00Z"
                     filled_at: "2026-10-26T09:42:00Z"
                 next_cursor: eyJjIjoiMjAyNi0xMC0yNlQwOTo0MjowMFoiLCJpIjo0M30
         "400":
-          description: limit is not an integer from 1 to 100, or cursor is malformed.
+          description: limit is not an integer from 1 to 100, cursor is malformed, or status is not a list of OrderStatus values.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -1304,11 +1607,14 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthenticated"
     post:
-      summary: Place a market order and execute it
+      summary: Place an order
       description: |
-        Validates the request, prices it from the live quote (see the Order schema) and, in one DB transaction,
-        locks the user row, checks cash or shares, moves the cash, updates the position and stores the order.
-        Concurrent orders by the same user are serialized, so cash never goes negative.
+        A MARKET order is priced from the live quote (see the Order schema) and, in one DB transaction, the user row
+        is locked, buying power or available shares are checked, the cash moves, the position is updated and the
+        order is stored FILLED (201). Concurrent orders by the same user are serialized, so cash never goes negative.
+
+        A LIMIT or STOP order is stored OPEN (201) after its reservation (see OrderRequest) is checked against buying
+        power or available shares and booked in the same kind of transaction; the matching engine fills it later.
 
         With an `Idempotency-Key` header, a retry with the same key and the same body returns the original order
         (200, identical body) and executes nothing; the same key with a different body is 409 CONFLICT.
@@ -1329,10 +1635,13 @@ paths:
         content:
           application/json:
             schema: { $ref: "#/components/schemas/OrderRequest" }
-            example: { orderbook_id: SIM-FJRD, side: BUY, quantity: 10 }
+            examples:
+              market: { value: { orderbook_id: SIM-FJRD, side: BUY, quantity: 10 } }
+              limit: { value: { orderbook_id: SIM-KALL, side: BUY, type: LIMIT, quantity: 10, limit_price: 95 } }
+              stop: { value: { orderbook_id: SIM-KALL, side: SELL, type: STOP, quantity: 10, stop_price: 90 } }
       responses:
         "201":
-          description: Executed.
+          description: Executed (MARKET, status FILLED) or accepted (LIMIT/STOP, status OPEN).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Order" }
@@ -1345,9 +1654,12 @@ paths:
                 type: MARKET
                 status: FILLED
                 quantity: 10
+                limit_price: null
+                stop_price: null
                 fill_price: 100.10
                 commission: 2.50
                 total: 1003.50
+                reject_reason: null
                 created_at: "2026-10-25T09:41:00Z"
                 filled_at: "2026-10-25T09:41:00Z"
         "200":
@@ -1357,8 +1669,9 @@ paths:
               schema: { $ref: "#/components/schemas/Order" }
         "400":
           description: |
-            Malformed JSON, blank orderbook_id, side not BUY/SELL, quantity <= 0 or with more than 4 decimals,
-            type other than MARKET, or an invalid Idempotency-Key.
+            Malformed JSON, blank orderbook_id, side not BUY/SELL, quantity <= 0 or with more than 4 decimals, an
+            unknown type, a missing, non-positive or over-precise (more than 2 decimals) limit_price on LIMIT or
+            stop_price on STOP, a price on a type that takes none, or an invalid Idempotency-Key.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -1374,7 +1687,7 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
               example: { error: "idempotency key already used for a different order", code: CONFLICT }
         "422":
-          description: Business rule; nothing was executed.
+          description: Business rule (buying power or available shares); nothing was executed or reserved.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -1383,6 +1696,72 @@ paths:
                 shares: { value: { error: "not enough shares to sell", code: INSUFFICIENT_SHARES } }
         "502":
           $ref: "#/components/responses/MarketDataUnavailable"
+
+  /orders/{id}:
+    parameters:
+      - $ref: "#/components/parameters/OrderID"
+    get:
+      summary: One of the signed-in user's orders
+      description: Use it to poll an OPEN order until the matching engine fills or rejects it.
+      operationId: getOrder
+      tags: [Orders]
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: The order.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+              example:
+                id: 51
+                orderbook_id: SIM-KALL
+                symbol: KALL
+                name: Kallsten Bank
+                side: BUY
+                type: LIMIT
+                status: FILLED
+                quantity: 10
+                limit_price: 95.00
+                stop_price: null
+                fill_price: 94.89
+                commission: 2.37
+                total: 951.27
+                reject_reason: null
+                created_at: "2026-11-08T09:41:00Z"
+                filled_at: "2026-11-08T09:41:03Z"
+        "400":
+          $ref: "#/components/responses/OrderIDValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/OrderNotFound"
+    delete:
+      summary: Cancel an OPEN order
+      description: |
+        In one transaction (user, position and order rows locked, in that order) the order moves from OPEN to
+        CANCELLED and its reservation is released. A fill and a cancel racing for the same order serialize on these
+        locks: whichever commits first wins, and the other sees the order is no longer OPEN.
+      operationId: cancelOrder
+      tags: [Orders]
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: Cancelled; the order with status CANCELLED.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "400":
+          $ref: "#/components/responses/OrderIDValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/OrderNotFound"
+        "409":
+          description: The order is not OPEN any more (already filled, cancelled or rejected).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "order is not open", code: ORDER_NOT_OPEN }
 
   # Watchlists (story NW-06). Every route needs a session and only sees the caller's own lists:
   # another user's list id is 404 WATCHLIST_NOT_FOUND, never 403. Items are keyed by orderbook_id.
@@ -1587,7 +1966,10 @@ paths:
               schema: { $ref: "#/components/schemas/Portfolio" }
               example:
                 cash: 98996.50
+                reserved_cash: 0
+                buying_power: 98996.50
                 holdings_value: 1100.00
+                vault_value: 0
                 total_equity: 100096.50
                 unrealized_pnl: 96.50
                 realized_pnl: 0
@@ -1603,6 +1985,7 @@ paths:
                     unrealized_pnl_percent: 9.62
                     day_change_percent: 1.25
                     weight: 100
+                    reserved_quantity: 0
                 top_movers:
                   - orderbook_id: SIM-NVE
                     symbol: NVE
@@ -1615,6 +1998,74 @@ paths:
                     unrealized_pnl_percent: 9.62
                     day_change_percent: 1.25
                     weight: 100
+                    reserved_quantity: 0
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+
+  /ai/instruments/{orderbook_id}/brief:
+    get:
+      summary: Plain-language AI brief of one instrument
+      description: |
+        Explains the instrument's numbers and risks for a beginner. Served from today's shared cache when it exists
+        (`cached: true`, no model call, no usage). Otherwise the brief is generated through the LLM gateway, which
+        checks the caller's daily token budget first and records the call in the usage ledger. Concurrent requests
+        for the same uncached brief make one model call. An unknown instrument fails before any model call.
+      operationId: getInstrumentBrief
+      tags: [AI]
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: "#/components/parameters/OrderbookID"
+      responses:
+        "200":
+          description: The brief.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InstrumentBrief" }
+              example:
+                orderbook_id: SIM-FJRD
+                generated_at: "2026-11-08T09:30:00Z"
+                model: fake
+                prompt_version: instrument_brief.v1
+                cached: false
+                disclaimer: "AI-generated · educational, not financial advice"
+                brief:
+                  summary: "FAKE: Fjord Robotics (FJRD) trades at 100.00 SEK."
+                  what_the_numbers_say:
+                    - { metric: Last price, value: "100.00 SEK", explanation: "FAKE: the price of one FJRD share." }
+                  risks: ["FAKE: Industrials companies move with the business cycle."]
+                  beginner_takeaway: "FAKE: learn what Fjord Robotics does before you trade FJRD."
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/InstrumentNotFound"
+        "422":
+          $ref: "#/components/responses/AIRefused"
+        "429":
+          $ref: "#/components/responses/AIBudgetExceeded"
+        "502":
+          $ref: "#/components/responses/MarketDataUnavailable"
+        "503":
+          $ref: "#/components/responses/AIUnavailable"
+
+  /ai/usage:
+    get:
+      summary: The signed-in user's LLM usage and budget today
+      operationId: getAIUsage
+      tags: [AI]
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: Today's usage (UTC).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AIUsage" }
+              example:
+                date: "2026-11-08"
+                budget_tokens: 200000
+                used_tokens: 412
+                remaining_tokens: 199588
+                by_feature:
+                  - { feature: instrument_brief, calls: 1, input_tokens: 350, output_tokens: 62 }
         "401":
           $ref: "#/components/responses/Unauthenticated"
 
@@ -1693,73 +2144,178 @@ paths:
                     allocation:
                       - { label: FJRD, orderbook_id: SIM-FJRD, value: 10000.00, weight: 10.00 }
                       - { label: Cash, orderbook_id: null, value: 89964.97, weight: 90.00 }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
 
-  /ai/instruments/{orderbook_id}/brief:
+  /vault:
     get:
-      summary: Plain-language AI brief of one instrument
+      summary: The signed-in user's vault balance, APY, interest earned, and idle cash projection
       description: |
-        Explains the instrument's numbers and risks for a beginner. Served from today's shared cache when it exists
-        (`cached: true`, no model call, no usage). Otherwise the brief is generated through the LLM gateway, which
-        checks the caller's daily token budget first and records the call in the usage ledger. Concurrent requests
-        for the same uncached brief make one model call. An unknown instrument fails before any model call.
-      operationId: getInstrumentBrief
-      tags: [AI]
+        Returns the user's vault status. Interest compounds daily and is accrued lazily on every read or mutation:
+        balance × (1 + APY)^(elapsed_days/365).
+      operationId: getVault
+      tags: [Vault]
       security: [{ sessionCookie: [] }]
-      parameters:
-        - $ref: "#/components/parameters/OrderbookID"
       responses:
         "200":
-          description: The brief.
+          description: The vault status.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/InstrumentBrief" }
+              schema: { $ref: "#/components/schemas/Vault" }
               example:
-                orderbook_id: SIM-FJRD
-                generated_at: "2026-11-08T09:30:00Z"
-                model: fake
-                prompt_version: instrument_brief.v1
-                cached: false
-                disclaimer: "AI-generated · educational, not financial advice"
-                brief:
-                  summary: "FAKE: Fjord Robotics (FJRD) trades at 100.00 SEK."
-                  what_the_numbers_say:
-                    - { metric: Last price, value: "100.00 SEK", explanation: "FAKE: the price of one FJRD share." }
-                  risks: ["FAKE: Industrials companies move with the business cycle."]
-                  beginner_takeaway: "FAKE: learn what Fjord Robotics does before you trade FJRD."
+                balance: 20000.00
+                apy: 0.051
+                interest_earned_total: 0.00
+                projected_monthly_interest_on_idle_cash: 335.34
         "401":
           $ref: "#/components/responses/Unauthenticated"
-        "404":
-          $ref: "#/components/responses/InstrumentNotFound"
-        "422":
-          $ref: "#/components/responses/AIRefused"
-        "429":
-          $ref: "#/components/responses/AIBudgetExceeded"
-        "502":
-          $ref: "#/components/responses/MarketDataUnavailable"
-        "503":
-          $ref: "#/components/responses/AIUnavailable"
 
-  /ai/usage:
+  /vault/deposits:
+    post:
+      summary: Deposit uninvested cash into the vault
+      description: |
+        Transfers cash from buying power into the vault. Accrues pending interest first.
+      operationId: depositVault
+      tags: [Vault]
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VaultTransferRequest" }
+            example: { amount: 20000.00 }
+      responses:
+        "201":
+          description: Deposited successfully.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VaultTransaction" }
+              example:
+                id: 1
+                type: DEPOSIT
+                amount: 20000.00
+                created_at: "2026-11-08T09:41:00Z"
+        "400":
+          description: Amount is non-positive or has more than 2 decimal places.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "amount must be positive with at most 2 decimals", code: VALIDATION_ERROR }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "422":
+          description: Amount exceeds buying power.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "insufficient buying power", code: INSUFFICIENT_FUNDS }
+
+  /vault/withdrawals:
+    post:
+      summary: Withdraw cash from the vault back to cash balance
+      description: |
+        Transfers cash from the vault back to uninvested cash. Accrues pending interest first.
+      operationId: withdrawVault
+      tags: [Vault]
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VaultTransferRequest" }
+            example: { amount: 5000.00 }
+      responses:
+        "201":
+          description: Withdrawn successfully.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VaultTransaction" }
+              example:
+                id: 2
+                type: WITHDRAWAL
+                amount: 5000.00
+                created_at: "2026-11-08T09:42:00Z"
+        "400":
+          description: Amount is non-positive or has more than 2 decimal places.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "amount must be positive with at most 2 decimals", code: VALIDATION_ERROR }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "422":
+          description: Amount exceeds vault balance.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "insufficient vault balance", code: INSUFFICIENT_VAULT_BALANCE }
+
+  /vault/transactions:
     get:
-      summary: The signed-in user's LLM usage and budget today
-      operationId: getAIUsage
-      tags: [AI]
+      summary: List the signed-in user's vault transactions
+      description: |
+        Lists the user's deposits and withdrawals newest first.
+      operationId: listVaultTransactions
+      tags: [Vault]
       security: [{ sessionCookie: [] }]
       responses:
         "200":
-          description: Today's usage (UTC).
+          description: The list of vault transactions.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AIUsage" }
+              schema: { $ref: "#/components/schemas/VaultTransactionListResponse" }
               example:
-                date: "2026-11-08"
-                budget_tokens: 200000
-                used_tokens: 412
-                remaining_tokens: 199588
-                by_feature:
-                  - { feature: instrument_brief, calls: 1, input_tokens: 350, output_tokens: 62 }
+                items:
+                  - id: 2
+                    type: WITHDRAWAL
+                    amount: 5000.00
+                    created_at: "2026-11-08T09:42:00Z"
+                  - id: 1
+                    type: DEPOSIT
+                    amount: 20000.00
+                    created_at: "2026-11-08T09:41:00Z"
+                next_cursor: null
         "401":
           $ref: "#/components/responses/Unauthenticated"
+
+  /leaderboard:
+    get:
+      summary: Public leaderboard ranked by return or Sharpe ratio
+      description: |
+        Materialized rankings refreshed every LEADERBOARD_REFRESH (story NW-13).
+        metric=return ranks all opted-in users by total_return_pct.
+        metric=sharpe ranks only users with sufficient data by sharpe_ratio.
+        Ties are broken by earlier opted_in_at.
+      operationId: getLeaderboard
+      tags: [Leaderboard]
+      security:
+        - {}
+        - sessionCookie: []
+      parameters:
+        - name: metric
+          in: query
+          required: true
+          description: Ranking metric.
+          schema:
+            $ref: "#/components/schemas/LeaderboardMetric"
+          example: return
+        - name: limit
+          in: query
+          required: false
+          description: Maximum entries to return (1–100, default 50).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        "200":
+          description: Ranked leaderboard entries.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LeaderboardPage" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
 
   /ai/ask:
     post:
