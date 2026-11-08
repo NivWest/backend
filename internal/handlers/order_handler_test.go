@@ -397,3 +397,61 @@ func TestOrderHandler_ListOrders_Unauthenticated(t *testing.T) {
 		expectErrorCode(t, w, domain.CodeUnauthenticated)
 	}
 }
+
+func patchOrderNote(t *testing.T, r http.Handler, session, id, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/orders/"+id+"/note", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if session != "" {
+		req.AddCookie(&http.Cookie{Name: "session_id", Value: session})
+	}
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
+func TestOrderHandler_UpdateOrderNote(t *testing.T) {
+	repo := &testutil.OrderRepo{}
+	engine := orderEngine(repo, fjrdMarket())
+
+	// Create an order first
+	wPost := postOrder(t, engine, memberSession, "", `{"orderbook_id":"SIM-FJRD","side":"BUY","quantity":10,"note":"initial"}`)
+	expectStatus(t, wPost, http.StatusCreated)
+
+	// Successful update
+	wPatch := patchOrderNote(t, engine, memberSession, "1", `{"note":"updated thesis"}`)
+	expectStatus(t, wPatch, http.StatusOK)
+	var updated domain.Order
+	if err := json.Unmarshal(wPatch.Body.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Note != "updated thesis" {
+		t.Fatalf("updated.Note = %q, want %q", updated.Note, "updated thesis")
+	}
+
+	// >500 characters
+	longNote := strings.Repeat("x", 501)
+	wLong := patchOrderNote(t, engine, memberSession, "1", `{"note":"`+longNote+`"}`)
+	expectStatus(t, wLong, http.StatusBadRequest)
+	expectErrorCode(t, wLong, domain.CodeValidation)
+
+	// Non-existent order
+	wNotFound := patchOrderNote(t, engine, memberSession, "999", `{"note":"valid"}`)
+	expectStatus(t, wNotFound, http.StatusNotFound)
+	expectErrorCode(t, wNotFound, domain.CodeOrderNotFound)
+
+	// Another user's order returns 404
+	wOtherUser := patchOrderNote(t, engine, adminSession, "1", `{"note":"valid"}`)
+	expectStatus(t, wOtherUser, http.StatusNotFound)
+	expectErrorCode(t, wOtherUser, domain.CodeOrderNotFound)
+
+	// Invalid id
+	wBadID := patchOrderNote(t, engine, memberSession, "abc", `{"note":"valid"}`)
+	expectStatus(t, wBadID, http.StatusBadRequest)
+	expectErrorCode(t, wBadID, domain.CodeValidation)
+
+	// Unauthenticated
+	wUnauth := patchOrderNote(t, engine, "", "1", `{"note":"valid"}`)
+	expectStatus(t, wUnauth, http.StatusUnauthorized)
+	expectErrorCode(t, wUnauth, domain.CodeUnauthenticated)
+}

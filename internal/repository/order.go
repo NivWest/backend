@@ -136,6 +136,7 @@ func (r *orderRepo) Execute(ctx context.Context, p domain.ExecuteOrderParams) (*
 		// cost basis before the sale (avg_cost is unchanged by selling).
 		balance := user.Balance
 		userUpdates := map[string]any{}
+		var realizedPnLPtr *decimal.Decimal
 		switch p.Side {
 		case domain.OrderSideBuy:
 			if balance.LessThan(p.Total) {
@@ -151,6 +152,7 @@ func (r *orderRepo) Execute(ctx context.Context, p domain.ExecuteOrderParams) (*
 			}
 			balance = balance.Add(p.Total)
 			realized := domain.RealizedPnL(p.Total, position.AvgCost, p.Quantity)
+			realizedPnLPtr = &realized
 			userUpdates["realized_pnl"] = user.RealizedPnL.Add(realized)
 			if err := applySell(tx, position, p.Quantity); err != nil {
 				return err
@@ -173,18 +175,20 @@ func (r *orderRepo) Execute(ctx context.Context, p domain.ExecuteOrderParams) (*
 			orderType = domain.OrderTypeMarket
 		}
 		order := models.Order{
-			UserID:     p.UserID,
-			StockID:    p.StockID,
-			Side:       string(p.Side),
-			Type:       string(orderType),
-			Status:     string(domain.OrderStatusFilled),
-			Quantity:   p.Quantity,
-			FillPrice:  p.FillPrice,
-			Commission: p.Commission,
-			Total:      p.Total,
-			CreatedAt:  now,
-			UpdatedAt:  now,
-			FilledAt:   &now,
+			UserID:      p.UserID,
+			StockID:     p.StockID,
+			Side:        string(p.Side),
+			Type:        string(orderType),
+			Status:      string(domain.OrderStatusFilled),
+			Quantity:    p.Quantity,
+			FillPrice:   p.FillPrice,
+			Commission:  p.Commission,
+			Total:       p.Total,
+			Note:        p.Note,
+			RealizedPnL: realizedPnLPtr,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+			FilledAt:    &now,
 		}
 		if p.IdempotencyKey != "" {
 			key := p.IdempotencyKey
@@ -291,7 +295,45 @@ func toDomainOrder(o *models.Order, s *models.Stock) *domain.Order {
 		FillPrice:   o.FillPrice,
 		Commission:  o.Commission,
 		Total:       o.Total,
+		Note:        o.Note,
+		RealizedPnL: o.RealizedPnL,
 		CreatedAt:   o.CreatedAt.UTC(),
 		FilledAt:    filledAt,
 	}
+}
+
+// ListAllByUser returns all orders of the user, ordered by created_at asc, id asc.
+func (r *orderRepo) ListAllByUser(ctx context.Context, userID uint) ([]domain.Order, error) {
+	var rows []models.Order
+	if err := r.db.WithContext(ctx).
+		Preload("Stock", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
+		Where("user_id = ?", userID).
+		Order("created_at asc, id asc").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]domain.Order, len(rows))
+	for i := range rows {
+		out[i] = *toDomainOrder(&rows[i], &rows[i].Stock)
+	}
+	return out, nil
+}
+
+// UpdateNote updates the note on an order owned by userID (story NW-17).
+func (r *orderRepo) UpdateNote(ctx context.Context, userID, orderID uint, note string) (*domain.Order, error) {
+	var order models.Order
+	if err := r.db.WithContext(ctx).
+		Preload("Stock", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
+		Where("id = ? AND user_id = ?", orderID, userID).
+		First(&order).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrOrderNotFound
+		}
+		return nil, err
+	}
+	if err := r.db.WithContext(ctx).Model(&order).Update("note", note).Error; err != nil {
+		return nil, err
+	}
+	order.Note = note
+	return toDomainOrder(&order, &order.Stock), nil
 }

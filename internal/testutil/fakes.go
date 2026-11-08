@@ -191,6 +191,8 @@ type OrderRepo struct {
 	FindByIdempotencyKeyFn func(ctx context.Context, userID uint, key string) (*domain.Order, error)
 	ExecuteFn              func(ctx context.Context, p domain.ExecuteOrderParams) (*domain.Order, bool, error)
 	ListByUserFn           func(ctx context.Context, userID uint, before *domain.OrderCursor, limit int) ([]domain.Order, error)
+	ListAllByUserFn        func(ctx context.Context, userID uint) ([]domain.Order, error)
+	UpdateNoteFn           func(ctx context.Context, userID, orderID uint, note string) (*domain.Order, error)
 
 	// keys maps each created order (by index in Orders) to its user and idempotency key.
 	keys []orderKey
@@ -263,6 +265,7 @@ func (r *OrderRepo) Execute(ctx context.Context, p domain.ExecuteOrderParams) (*
 		FillPrice:   p.FillPrice,
 		Commission:  p.Commission,
 		Total:       p.Total,
+		Note:        p.Note,
 		CreatedAt:   now,
 		FilledAt:    &now,
 	}
@@ -304,6 +307,39 @@ func (r *OrderRepo) ListByUser(ctx context.Context, userID uint, before *domain.
 		page = append(page, o)
 	}
 	return page, nil
+}
+
+// ListAllByUser returns all orders of the user.
+func (r *OrderRepo) ListAllByUser(ctx context.Context, userID uint) ([]domain.Order, error) {
+	if r.ListAllByUserFn != nil {
+		return r.ListAllByUserFn(ctx, userID)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []domain.Order
+	for i, k := range r.keys {
+		if k.userID == userID {
+			out = append(out, *r.Orders[i])
+		}
+	}
+	return out, nil
+}
+
+// UpdateNote updates the note on the order for userID.
+func (r *OrderRepo) UpdateNote(ctx context.Context, userID, orderID uint, note string) (*domain.Order, error) {
+	if r.UpdateNoteFn != nil {
+		return r.UpdateNoteFn(ctx, userID, orderID, note)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, k := range r.keys {
+		if k.userID == userID && r.Orders[i].ID == orderID {
+			r.Orders[i].Note = note
+			cp := *r.Orders[i]
+			return &cp, nil
+		}
+	}
+	return nil, domain.ErrOrderNotFound
 }
 
 // findLocked returns a copy of the user's order stored under key, or nil. r.mu must be held.

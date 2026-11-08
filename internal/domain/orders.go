@@ -48,9 +48,12 @@ const (
 	CodeInsufficientFunds  = "INSUFFICIENT_FUNDS"
 	CodeInsufficientShares = "INSUFFICIENT_SHARES"
 	CodeConflict           = "CONFLICT"
+	CodeOrderNotFound      = "ORDER_NOT_FOUND"
 )
 
 var (
+	// ErrOrderNotFound means the order does not exist or is not owned by the user. Handlers map it to 404 ORDER_NOT_FOUND.
+	ErrOrderNotFound = errors.New("order not found")
 	// ErrInsufficientFunds means a BUY's total exceeds the user's cash. Handlers map it to 422 INSUFFICIENT_FUNDS.
 	ErrInsufficientFunds = errors.New("insufficient funds")
 	// ErrInsufficientShares means a SELL's quantity exceeds the position. Handlers map it to 422 INSUFFICIENT_SHARES.
@@ -58,8 +61,6 @@ var (
 	// ErrIdempotencyKeyReused means the Idempotency-Key was already used by this user for a different
 	// order (another orderbook_id, side, quantity or type). Handlers map it to 409 CONFLICT.
 	ErrIdempotencyKeyReused = errors.New("idempotency key already used for a different order")
-	// ErrOrderNotFound means no order matches (e.g. no order with this idempotency key yet).
-	ErrOrderNotFound = errors.New("order not found")
 )
 
 // OrderRequest is the body of POST /orders (#/components/schemas/OrderRequest). The service validates it
@@ -70,6 +71,7 @@ type OrderRequest struct {
 	Side        OrderSide       `json:"side"`
 	Quantity    decimal.Decimal `json:"quantity"`
 	Type        OrderType       `json:"type,omitempty"`
+	Note        string          `json:"note,omitempty"`
 }
 
 // Order is an order and its fill (#/components/schemas/Order). Symbol and Name come from the stock row.
@@ -86,9 +88,11 @@ type Order struct {
 	FillPrice   decimal.Decimal
 	Commission  decimal.Decimal
 	// Total is the cash moved: gross + commission for a BUY (debited), gross − commission for a SELL (credited).
-	Total     decimal.Decimal
-	CreatedAt time.Time
-	FilledAt  *time.Time
+	Total       decimal.Decimal
+	Note        string
+	RealizedPnL *decimal.Decimal
+	CreatedAt   time.Time
+	FilledAt    *time.Time
 }
 
 type orderJSON struct {
@@ -103,6 +107,7 @@ type orderJSON struct {
 	FillPrice   json.Number `json:"fill_price"`
 	Commission  json.Number `json:"commission"`
 	Total       json.Number `json:"total"`
+	Note        string      `json:"note"`
 	CreatedAt   time.Time   `json:"created_at"`
 	FilledAt    *time.Time  `json:"filled_at"`
 }
@@ -126,6 +131,7 @@ func (o Order) MarshalJSON() ([]byte, error) {
 		FillPrice:   json.Number(o.FillPrice.StringFixed(2)),
 		Commission:  json.Number(o.Commission.StringFixed(2)),
 		Total:       json.Number(o.Total.StringFixed(2)),
+		Note:        o.Note,
 		CreatedAt:   o.CreatedAt.UTC(),
 		FilledAt:    filledAt,
 	})
@@ -148,6 +154,7 @@ type ExecuteOrderParams struct {
 	Commission decimal.Decimal
 	// Total is debited from (BUY) or credited to (SELL) the user's balance.
 	Total decimal.Decimal
+	Note  string
 	// IdempotencyKey is "" when the request had no Idempotency-Key header (stored as NULL).
 	IdempotencyKey string
 }
@@ -177,4 +184,10 @@ type OrderRepository interface {
 	// pagination). Symbol and Name come from the stock row (soft-deleted stocks included). It returns an
 	// empty, non-nil slice when there are none (story NW-05).
 	ListByUser(ctx context.Context, userID uint, before *OrderCursor, limit int) ([]Order, error)
+
+	// ListAllByUser returns all orders of the user, ordered by created_at asc.
+	ListAllByUser(ctx context.Context, userID uint) ([]Order, error)
+
+	// UpdateNote updates the note on an order owned by userID (story NW-17).
+	UpdateNote(ctx context.Context, userID, orderID uint, note string) (*Order, error)
 }
