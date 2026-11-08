@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 
 	"backend/internal/domain"
 	"backend/internal/middleware"
@@ -33,7 +35,44 @@ func (h *OrderHandler) Register(v1 *gin.RouterGroup) {
 	orders := v1.Group("/orders")
 	orders.Use(middleware.RequireAuth(h.auth))
 
+	orders.GET("", h.ListOrders)
 	orders.POST("", h.PlaceOrder)
+}
+
+// ListOrders handles GET /orders?limit=&cursor=: 200 with one OrderPage of the signed-in user's orders,
+// newest first. A missing limit means domain.DefaultOrderPageLimit; the cursor is passed on unchanged.
+func (h *OrderHandler) ListOrders(c *gin.Context) {
+	user, ok := middleware.CurrentUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, domain.ErrorResponse{Error: "authentication required", Code: domain.CodeUnauthenticated})
+		return
+	}
+
+	limit := domain.DefaultOrderPageLimit
+	if raw, present := c.GetQuery("limit"); present {
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, domain.ErrorResponse{
+				Error: fmt.Sprintf("limit must be an integer from 1 to %d", domain.MaxOrderPageLimit),
+				Code:  domain.CodeValidation,
+			})
+			return
+		}
+		limit = n
+	}
+
+	page, err := h.service.ListOrders(c.Request.Context(), user.ID, limit, c.Query("cursor"))
+	if err != nil {
+		var validation *domain.ValidationError
+		if errors.As(err, &validation) {
+			c.JSON(http.StatusBadRequest, domain.ErrorResponse{Error: validation.Msg, Code: domain.CodeValidation})
+			return
+		}
+		log.Printf("[ORDER] list orders failed for user_id=%d: %v", user.ID, err)
+		c.JSON(http.StatusInternalServerError, domain.ErrorResponse{Error: "internal server error", Code: domain.CodeInternal})
+		return
+	}
+	c.JSON(http.StatusOK, page)
 }
 
 // PlaceOrder handles POST /orders: 201 with the executed Order, or 200 with the original Order when the

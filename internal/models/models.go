@@ -10,17 +10,19 @@ import (
 // Money columns are numeric(18,2) and quantities numeric(18,4), held as decimal.Decimal (story NW-04).
 
 type User struct {
-	ID        uint            `gorm:"primaryKey" json:"id"`
-	GoogleID  string          `gorm:"uniqueIndex;not null" json:"google_id"`
-	Email     string          `gorm:"uniqueIndex;not null" json:"email"`
-	Name      string          `json:"name"`
-	Role      string          `gorm:"type:varchar(20);not null;default:member" json:"role"`
-	Balance   decimal.Decimal `gorm:"type:numeric(18,2);not null;default:100000.00" json:"balance"` // Simulator starting cash
-	Positions []Position      `json:"positions,omitempty"`
-	Favorites []Stock         `gorm:"many2many:user_favorites;" json:"favorites,omitempty"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
-	DeletedAt gorm.DeletedAt  `gorm:"index" json:"-"`
+	ID       uint            `gorm:"primaryKey" json:"id"`
+	GoogleID string          `gorm:"uniqueIndex;not null" json:"google_id"`
+	Email    string          `gorm:"uniqueIndex;not null" json:"email"`
+	Name     string          `json:"name"`
+	Role     string          `gorm:"type:varchar(20);not null;default:member" json:"role"`
+	Balance  decimal.Decimal `gorm:"type:numeric(18,2);not null;default:100000.00" json:"balance"` // Simulator starting cash
+	// RealizedPnL accumulates sell total − avg_cost × quantity sold over every SELL (story NW-05).
+	RealizedPnL decimal.Decimal `gorm:"column:realized_pnl;type:numeric(18,2);not null;default:0" json:"realized_pnl"`
+	Positions   []Position      `json:"positions,omitempty"`
+	Favorites   []Stock         `gorm:"many2many:user_favorites;" json:"favorites,omitempty"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
+	DeletedAt   gorm.DeletedAt  `gorm:"index" json:"-"`
 }
 
 type Session struct {
@@ -50,12 +52,15 @@ type Stock struct {
 }
 
 type Position struct {
-	ID        uint            `gorm:"primaryKey" json:"id"`
-	UserID    uint            `gorm:"index;not null;constraint:OnDelete:CASCADE;" json:"user_id"`
-	StockID   uint            `gorm:"index;not null;constraint:OnDelete:CASCADE;" json:"stock_id"`
-	Stock     Stock           `json:"stock,omitempty"`
-	Quantity  decimal.Decimal `gorm:"type:numeric(18,4);not null" json:"quantity"` // Fractional shares support
-	AvgPrice  decimal.Decimal `gorm:"type:numeric(18,2);not null" json:"avg_price"`
+	ID       uint            `gorm:"primaryKey" json:"id"`
+	UserID   uint            `gorm:"index;not null;constraint:OnDelete:CASCADE;" json:"user_id"`
+	StockID  uint            `gorm:"index;not null;constraint:OnDelete:CASCADE;" json:"stock_id"`
+	Stock    Stock           `json:"stock,omitempty"`
+	Quantity decimal.Decimal `gorm:"type:numeric(18,4);not null" json:"quantity"`  // Fractional shares support
+	AvgPrice decimal.Decimal `gorm:"type:numeric(18,2);not null" json:"avg_price"` // Average fill price, commission excluded
+	// AvgCost is the cost basis per share, buy commission included: (Σ BUY totals of the open lot) ÷ quantity.
+	// Selling leaves it unchanged (story NW-05). Kept at 8 decimals so avg_cost × quantity stays exact enough.
+	AvgCost   decimal.Decimal `gorm:"type:numeric(20,8);not null;default:0" json:"avg_cost"`
 	CreatedAt time.Time       `json:"created_at"`
 	UpdatedAt time.Time       `json:"updated_at"`
 }
@@ -79,8 +84,8 @@ type Transaction struct {
 // that moves the cash and the position. IdempotencyKey is unique per user (NULL when the
 // request had no Idempotency-Key header), so concurrent retries collapse into one row.
 type Order struct {
-	ID             uint            `gorm:"primaryKey" json:"id"`
-	UserID         uint            `gorm:"not null;index;uniqueIndex:idx_orders_user_idempotency_key,priority:1;constraint:OnDelete:CASCADE;" json:"user_id"`
+	ID             uint            `gorm:"primaryKey;index:idx_orders_user_created_id,priority:3" json:"id"`
+	UserID         uint            `gorm:"not null;index;uniqueIndex:idx_orders_user_idempotency_key,priority:1;index:idx_orders_user_created_id,priority:1;constraint:OnDelete:CASCADE;" json:"user_id"`
 	StockID        uint            `gorm:"not null;index;constraint:OnDelete:CASCADE;" json:"stock_id"`
 	Stock          Stock           `json:"stock,omitempty"`
 	Side           string          `gorm:"type:varchar(4);not null" json:"side"`
@@ -91,7 +96,7 @@ type Order struct {
 	Commission     decimal.Decimal `gorm:"type:numeric(18,2);not null" json:"commission"`
 	Total          decimal.Decimal `gorm:"type:numeric(18,2);not null" json:"total"`
 	IdempotencyKey *string         `gorm:"size:255;uniqueIndex:idx_orders_user_idempotency_key,priority:2" json:"-"`
-	CreatedAt      time.Time       `json:"created_at"`
+	CreatedAt      time.Time       `gorm:"index:idx_orders_user_created_id,priority:2" json:"created_at"` // Order history keyset (NW-05)
 	UpdatedAt      time.Time       `json:"updated_at"`
 	FilledAt       *time.Time      `json:"filled_at"`
 }

@@ -165,8 +165,16 @@ type OrderRepository interface {
 	// check the idempotency key. When the key already has an order it returns that order with
 	// created=false and changes nothing. Otherwise it verifies cash (BUY: balance >= Total, else
 	// ErrInsufficientFunds) or shares (SELL: position >= Quantity, else ErrInsufficientShares), moves
-	// the cash, updates the position (BUY: weighted average fill price; SELL: average unchanged, the row
-	// is deleted at zero), inserts a FILLED order with filled_at = now and returns it with created=true.
+	// the cash, updates the position and the realized P&L, inserts a FILLED order with filled_at = now and
+	// returns it with created=true. Positions (story NW-05): BUY sets avg_cost = (avg_cost × old quantity +
+	// Total) / new quantity, commission included; SELL leaves avg_cost unchanged, adds
+	// round2(Total − avg_cost × Quantity) to users.realized_pnl, and deletes the row at zero.
 	// A unique-index violation on (user_id, idempotency_key) also yields the existing order, created=false.
 	Execute(ctx context.Context, p ExecuteOrderParams) (order *Order, created bool, err error)
+
+	// ListByUser returns up to limit of the user's orders, newest first (created_at desc, then id desc).
+	// With before set, only orders strictly after that position in this order are returned (keyset
+	// pagination). Symbol and Name come from the stock row (soft-deleted stocks included). It returns an
+	// empty, non-nil slice when there are none (story NW-05).
+	ListByUser(ctx context.Context, userID uint, before *OrderCursor, limit int) ([]Order, error)
 }

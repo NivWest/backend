@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"backend/internal/domain"
 	"backend/internal/integrations/database"
@@ -571,5 +572,302 @@ func TestMigrate_LegacySchema(t *testing.T) {
 	}
 	if got := balanceOf(t, db, 1); !got.Equal(dec("95000.50")) {
 		t.Fatalf("legacy balance = %s, want 95000.50", got)
+	}
+
+	// NW-05 columns: legacy lots get avg_cost = avg_price, legacy users start at realized_pnl 0.
+	checkColumn("positions", "avg_cost", "NO", 20, 8)
+	checkColumn("users", "realized_pnl", "NO", 18, 2)
+	var pos models.Position
+	if err := db.Take(&pos, 1).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !pos.AvgCost.Equal(dec("250.10")) {
+		t.Fatalf("legacy avg_cost = %s, want 250.10", pos.AvgCost)
+	}
+	if got := realizedOf(t, db, 1); !got.IsZero() {
+		t.Fatalf("legacy realized_pnl = %s, want 0", got)
+	}
+}
+
+func realizedOf(t *testing.T, db *gorm.DB, userID uint) decimal.Decimal {
+	t.Helper()
+	var u models.User
+	if err := db.Take(&u, userID).Error; err != nil {
+		t.Fatalf("load user: %v", err)
+	}
+	return u.RealizedPnL
+}
+
+func positionOf(t *testing.T, db *gorm.DB, userID, stockID uint) models.Position {
+	t.Helper()
+	var pos models.Position
+	if err := db.Where("user_id = ? AND stock_id = ?", userID, stockID).Take(&pos).Error; err != nil {
+		t.Fatalf("load position: %v", err)
+	}
+	return pos
+}
+
+// TestOrderRepo_CostBasisAndRealizedPnL follows story NW-05 AC1/AC2: the buy commission is part of the
+// cost basis, a partial sell realizes P&L against it and leaves it unchanged.
+func TestOrderRepo_CostBasisAndRealizedPnL(t *testing.T) {
+	db := migratedDB(t)
+	repo := repository.NewOrderRepository(db)
+	ctx := context.Background()
+
+	user := createUser(t, db, "100000.00")
+	stockID, err := repo.EnsureStock(ctx, "SIM-NVE", "NVE", "Nordic Venture Energy")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// AC1: buy 10 at 100.10 + commission 2.50 = 1003.50 -> avg_cost 100.35, avg_price 100.10.
+	if _, _, err := repo.Execute(ctx, buy(user.ID, stockID, "10", "100.10", "2.50", "1003.50", "")); err != nil {
+		t.Fatal(err)
+	}
+	pos := positionOf(t, db, user.ID, stockID)
+	if !pos.Quantity.Equal(dec("10")) || !pos.AvgCost.Equal(dec("100.35")) || !pos.AvgPrice.Equal(dec("100.10")) {
+		t.Fatalf("after buy: %s @ cost %s / price %s, want 10 @ 100.35 / 100.10", pos.Quantity, pos.AvgCost, pos.AvgPrice)
+	}
+	if got := realizedOf(t, db, user.ID); !got.IsZero() {
+		t.Fatalf("realized after buy = %s, want 0", got)
+	}
+
+	// AC2: sell 5 at 109.89 (gross 549.45, commission 1.37, total 548.08) -> realized 46.33.
+	p := sell(user.ID, stockID, "5", "109.89", "1.37", "548.08")
+	p.IdempotencyKey = "sell-1"
+	if _, created, err := repo.Execute(ctx, p); err != nil || !created {
+		t.Fatalf("sell: created=%v err=%v", created, err)
+	}
+	// A replay must neither credit cash nor realize P&L again.
+	if _, created, err := repo.Execute(ctx, p); err != nil || created {
+		t.Fatalf("sell replay: created=%v err=%v, want created=false", created, err)
+	}
+	if got := realizedOf(t, db, user.ID); !got.Equal(dec("46.33")) {
+		t.Fatalf("realized = %s, want 46.33", got)
+	}
+	if got := balanceOf(t, db, user.ID); !got.Equal(dec("99544.58")) {
+		t.Fatalf("balance = %s, want 99544.58", got)
+	}
+	pos = positionOf(t, db, user.ID, stockID)
+	if !pos.Quantity.Equal(dec("5")) || !pos.AvgCost.Equal(dec("100.35")) || !pos.AvgPrice.Equal(dec("100.10")) {
+		t.Fatalf("after sell: %s @ cost %s / price %s, want 5 @ 100.35 / 100.10", pos.Quantity, pos.AvgCost, pos.AvgPrice)
+	}
+
+	// A second buy at another price: (100.35 × 5 + 601.50) / 10 = 110.325.
+	if _, _, err := repo.Execute(ctx, buy(user.ID, stockID, "5", "120.00", "1.50", "601.50", "")); err != nil {
+		t.Fatal(err)
+	}
+	pos = positionOf(t, db, user.ID, stockID)
+	if !pos.Quantity.Equal(dec("10")) || !pos.AvgCost.Equal(dec("110.325")) || !pos.AvgPrice.Equal(dec("110.05")) {
+		t.Fatalf("after second buy: %s @ cost %s / price %s, want 10 @ 110.325 / 110.05", pos.Quantity, pos.AvgCost, pos.AvgPrice)
+	}
+
+	// Selling everything at a loss: 1000.00 − 1103.25 = −103.25; cumulative 46.33 − 103.25 = −56.92.
+	if _, _, err := repo.Execute(ctx, sell(user.ID, stockID, "10", "100.25", "2.50", "1000.00")); err != nil {
+		t.Fatal(err)
+	}
+	if got := realizedOf(t, db, user.ID); !got.Equal(dec("-56.92")) {
+		t.Fatalf("realized = %s, want -56.92", got)
+	}
+	var n int64
+	db.Model(&models.Position{}).Where("user_id = ?", user.ID).Count(&n)
+	if n != 0 {
+		t.Fatalf("positions = %d after selling everything, want 0", n)
+	}
+
+	// A rejected sell changes nothing.
+	if _, _, err := repo.Execute(ctx, sell(user.ID, stockID, "1", "100", "0", "100")); !errors.Is(err, domain.ErrInsufficientShares) {
+		t.Fatalf("sell without position: err = %v", err)
+	}
+	if got := realizedOf(t, db, user.ID); !got.Equal(dec("-56.92")) {
+		t.Fatalf("realized after rejected sell = %s, want -56.92", got)
+	}
+}
+
+func TestOrderRepo_ListByUser(t *testing.T) {
+	db := migratedDB(t)
+	repo := repository.NewOrderRepository(db)
+	ctx := context.Background()
+
+	user := createUser(t, db, "100000.00")
+	other := createUser(t, db, "100000.00")
+	stockID, err := repo.EnsureStock(ctx, "SIM-NVE", "NVE", "Nordic Venture Energy")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	empty, err := repo.ListByUser(ctx, user.ID, nil, domain.DefaultOrderPageLimit)
+	if err != nil || empty == nil || len(empty) != 0 {
+		t.Fatalf("no orders: %#v %v, want empty non-nil", empty, err)
+	}
+
+	// Rows with controlled timestamps, two of them tied on created_at so id breaks the tie.
+	t0 := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	insert := func(userID uint, at time.Time, total string) uint {
+		t.Helper()
+		o := models.Order{
+			UserID: userID, StockID: stockID, Side: string(domain.OrderSideBuy), Type: string(domain.OrderTypeMarket),
+			Status: string(domain.OrderStatusFilled), Quantity: dec("1"), FillPrice: dec(total), Commission: dec("0"),
+			Total: dec(total), CreatedAt: at, UpdatedAt: at, FilledAt: &at,
+		}
+		if err := db.Omit("Stock").Create(&o).Error; err != nil {
+			t.Fatalf("insert order: %v", err)
+		}
+		return o.ID
+	}
+	oldest := insert(user.ID, t0, "1.00")
+	tieA := insert(user.ID, t0.Add(time.Minute), "2.00")
+	tieB := insert(user.ID, t0.Add(time.Minute), "3.00")
+	otherID := insert(other.ID, t0.Add(90*time.Second), "9.00")
+	newest := insert(user.ID, t0.Add(2*time.Minute), "4.00")
+	want := []uint{newest, tieB, tieA, oldest}
+
+	ids := func(orders []domain.Order) []uint {
+		out := make([]uint, 0, len(orders))
+		for _, o := range orders {
+			out = append(out, o.ID)
+		}
+		return out
+	}
+
+	all, err := repo.ListByUser(ctx, user.ID, nil, domain.DefaultOrderPageLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(all); !reflect.DeepEqual(got, want) {
+		t.Fatalf("order = %v, want %v", got, want)
+	}
+	first := all[0]
+	if first.OrderbookID != "SIM-NVE" || first.Symbol != "NVE" || first.Name != "Nordic Venture Energy" ||
+		!first.Total.Equal(dec("4.00")) || !first.CreatedAt.Equal(t0.Add(2*time.Minute)) || first.CreatedAt.Location() != time.UTC {
+		t.Fatalf("mapped order = %+v", first)
+	}
+
+	// Keyset paging, one row at a time, follows the same order and ends with an empty page.
+	var (
+		paged  []uint
+		cursor *domain.OrderCursor
+	)
+	for range len(want) + 1 {
+		page, err := repo.ListByUser(ctx, user.ID, cursor, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		if len(page) != 1 {
+			t.Fatalf("page size = %d, want 1", len(page))
+		}
+		paged = append(paged, page[0].ID)
+		cursor = &domain.OrderCursor{CreatedAt: page[0].CreatedAt, ID: page[0].ID}
+	}
+	if !reflect.DeepEqual(paged, want) {
+		t.Fatalf("paged = %v, want %v", paged, want)
+	}
+
+	// A cursor on the tied row returns only the row behind it at the same instant and the older one.
+	page, err := repo.ListByUser(ctx, user.ID, &domain.OrderCursor{CreatedAt: t0.Add(time.Minute), ID: tieB}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(page); !reflect.DeepEqual(got, []uint{tieA, oldest}) {
+		t.Fatalf("after tie cursor = %v, want %v", got, []uint{tieA, oldest})
+	}
+
+	// Other users are isolated; a user without orders gets an empty, non-nil slice.
+	otherPage, err := repo.ListByUser(ctx, other.ID, nil, 10)
+	if err != nil || !reflect.DeepEqual(ids(otherPage), []uint{otherID}) {
+		t.Fatalf("other user = %v %v, want [%d]", ids(otherPage), err, otherID)
+	}
+	fresh := createUser(t, db, "100000.00")
+	none, err := repo.ListByUser(ctx, fresh.ID, nil, 10)
+	if err != nil || none == nil || len(none) != 0 {
+		t.Fatalf("fresh user: %#v %v, want empty non-nil", none, err)
+	}
+
+	// Orders of a soft-deleted stock keep their symbol and name.
+	if err := db.Delete(&models.Stock{}, stockID).Error; err != nil {
+		t.Fatal(err)
+	}
+	all, err = repo.ListByUser(ctx, user.ID, nil, 2)
+	if err != nil || len(all) != 2 || all[0].Symbol != "NVE" || all[0].OrderbookID != "SIM-NVE" {
+		t.Fatalf("after soft delete: %+v %v", all, err)
+	}
+
+	// Orders written by Execute come first and page the same way.
+	if err := db.Unscoped().Model(&models.Stock{}).Where("id = ?", stockID).Update("deleted_at", nil).Error; err != nil {
+		t.Fatal(err)
+	}
+	executed, _, err := repo.Execute(ctx, buy(user.ID, stockID, "1", "100.10", "0.25", "100.35", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest, err := repo.ListByUser(ctx, user.ID, nil, 1)
+	if err != nil || len(latest) != 1 {
+		t.Fatalf("latest: %+v %v", latest, err)
+	}
+	assertSameOrder(t, "latest", executed, &latest[0])
+}
+
+func TestPortfolioRepo_SoftDeletedStockKeepsPosition(t *testing.T) {
+	db := migratedDB(t)
+	orders := repository.NewOrderRepository(db)
+	portfolio := repository.NewPortfolioRepository(db)
+	ctx := context.Background()
+
+	user := createUser(t, db, "100000.00")
+	stockID, err := orders.EnsureStock(ctx, "SIM-NVE", "NVE", "Nordic Venture Energy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := orders.Execute(ctx, buy(user.ID, stockID, "10", "100.10", "2.50", "1003.50", "")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Delete(&models.Stock{}, stockID).Error; err != nil {
+		t.Fatal(err)
+	}
+	positions, err := portfolio.GetUserPositions(ctx, user.ID)
+	if err != nil || len(positions) != 1 {
+		t.Fatalf("positions = %+v %v, want 1", positions, err)
+	}
+	p := positions[0]
+	if p.Stock.OrderbookID != "SIM-NVE" || p.Stock.Symbol != "NVE" || !p.AvgCost.Equal(dec("100.35")) {
+		t.Fatalf("position = %+v, want SIM-NVE with avg_cost 100.35", p)
+	}
+}
+
+func TestMigrate_BackfillAvgCost(t *testing.T) {
+	db := migratedDB(t)
+	user := createUser(t, db, "100000.00")
+	stock := models.Stock{OrderbookID: "SIM-NVE", Symbol: "NVE", Name: "Nordic Venture Energy"}
+	if err := db.Create(&stock).Error; err != nil {
+		t.Fatal(err)
+	}
+	other := models.Stock{OrderbookID: "SIM-FJRD", Symbol: "FJRD", Name: "Fjord Industries"}
+	if err := db.Create(&other).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// A pre-NW-05 lot (avg_cost still at its default 0) and an NW-05 lot with a real cost basis.
+	if err := db.Exec(`INSERT INTO positions (user_id, stock_id, quantity, avg_price, created_at, updated_at)
+		VALUES (?, ?, 12.5, 250.10, now(), now())`, user.ID, stock.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`INSERT INTO positions (user_id, stock_id, quantity, avg_price, avg_cost, created_at, updated_at)
+		VALUES (?, ?, 10, 100.10, 100.35, now(), now())`, user.ID, other.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	for i := range 2 { // idempotent
+		if err := database.Migrate(db); err != nil {
+			t.Fatalf("migrate run %d: %v", i+1, err)
+		}
+	}
+	if got := positionOf(t, db, user.ID, stock.ID).AvgCost; !got.Equal(dec("250.10")) {
+		t.Fatalf("legacy avg_cost = %s, want 250.10", got)
+	}
+	if got := positionOf(t, db, user.ID, other.ID).AvgCost; !got.Equal(dec("100.35")) {
+		t.Fatalf("NW-05 avg_cost = %s, want 100.35 (untouched)", got)
 	}
 }
