@@ -57,12 +57,13 @@ type QuoteHub struct {
 	newTicker func(time.Duration) Ticker
 	logf      func(string, ...any)
 
-	mu     sync.Mutex
-	topics map[string]*quoteTopic
-	subs   map[*quoteSubscriber]struct{}
-	closed bool
-	done   chan struct{} // closed by Close
-	wg     sync.WaitGroup
+	mu      sync.Mutex
+	topics  map[string]*quoteTopic
+	subs    map[*quoteSubscriber]struct{}
+	closed  bool
+	done    chan struct{} // closed by Close
+	wg      sync.WaitGroup
+	metrics domain.QuoteHubMetricsObserver
 }
 
 // quoteTopic is one polled instrument and its subscribers. Guarded by QuoteHub.mu.
@@ -104,6 +105,16 @@ func NewQuoteHub(provider domain.MarketDataProvider, opts QuoteHubOptions) *Quot
 		topics:    map[string]*quoteTopic{},
 		subs:      map[*quoteSubscriber]struct{}{},
 		done:      make(chan struct{}),
+	}
+}
+
+// SetMetricsObserver registers an observer for subscriber count metrics.
+func (h *QuoteHub) SetMetricsObserver(m domain.QuoteHubMetricsObserver) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.metrics = m
+	if m != nil {
+		m.SetSubscribers(len(h.subs))
 	}
 }
 
@@ -160,6 +171,9 @@ func (h *QuoteHub) Subscribe(ctx context.Context, ids []string) (<-chan domain.Q
 		sub.deliver(topic.last)
 	}
 	h.subs[sub] = struct{}{}
+	if h.metrics != nil {
+		h.metrics.SetSubscribers(len(h.subs))
+	}
 
 	go func() {
 		select {
@@ -281,6 +295,9 @@ func (h *QuoteHub) dropSubscriberLocked(sub *quoteSubscriber) {
 		}
 	}
 	delete(h.subs, sub)
+	if h.metrics != nil {
+		h.metrics.SetSubscribers(len(h.subs))
+	}
 	sub.close()
 }
 
@@ -293,6 +310,9 @@ func (h *QuoteHub) Close() {
 		return
 	}
 	h.closed = true
+	if h.metrics != nil {
+		h.metrics.SetSubscribers(0)
+	}
 	close(h.done)
 	for id, topic := range h.topics {
 		topic.cancel()

@@ -3,7 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -69,7 +69,7 @@ func (s *SnapshotService) OrderFilled(ctx context.Context, userID uint) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fillSnapshotTimeout)
 	defer cancel()
 	if err := s.TakeSnapshot(ctx, userID); err != nil {
-		log.Printf("[SNAPSHOT] after fill failed for user_id=%d: %v", userID, err)
+		slog.Error("equity snapshot after fill failed", "user_id", userID, "error", err)
 	}
 }
 
@@ -97,7 +97,7 @@ func (s *SnapshotService) SnapshotAll(ctx context.Context) (int, error) {
 			for i := range jobs {
 				snap, err := s.value(ctx, ids[i], at, quote)
 				if err != nil {
-					log.Printf("[SNAPSHOT] periodic snapshot failed for user_id=%d: %v", ids[i], err)
+					slog.Error("periodic equity snapshot failed", "user_id", ids[i], "error", err)
 					continue
 				}
 				results[i] = &snap // each worker writes only its own index

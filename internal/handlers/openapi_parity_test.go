@@ -20,6 +20,7 @@ import (
 	"backend/internal/domain"
 	"backend/internal/handlers"
 	"backend/internal/llm/fake"
+	"backend/internal/observability"
 	"backend/internal/services"
 	"backend/internal/testutil"
 
@@ -34,6 +35,7 @@ import (
 // routesOutsideSpec are mounted but deliberately not in the spec: the docs page is not part of /api/v1.
 var routesOutsideSpec = map[string]bool{
 	"GET /api/docs": true,
+	"GET /metrics":  true,
 }
 
 var httpMethods = map[string]bool{"get": true, "put": true, "post": true, "delete": true, "patch": true, "head": true, "options": true}
@@ -94,6 +96,7 @@ func fullApp() *app.App {
 			services.NewAIBriefService(gateway, provider, testutil.NewAIBriefRepo(), nil), gateway, auth),
 		SimHandler: handlers.NewSimHandler(&testutil.SimControl{}),
 		AuthRepo:   auth,
+		Metrics:    observability.NewMetrics(nil),
 	}
 }
 

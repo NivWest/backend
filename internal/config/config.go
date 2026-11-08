@@ -12,13 +12,13 @@ import (
 )
 
 type Config struct {
-	Server    Server
-	Database  Database
-	Redis     Redis
-	Avanza    Avanza
-	Market    Market
-	RateLimit RateLimit
-	Auth      Auth
+	Server        Server
+	Database      Database
+	Redis         Redis
+	Avanza        Avanza
+	Market        Market
+	RateLimit     RateLimit
+	Auth          Auth
 	Analytics     Analytics
 	LLM           LLM
 	Observability Observability

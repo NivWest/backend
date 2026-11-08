@@ -3,7 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -16,6 +16,7 @@ import (
 	"backend/internal/integrations/database"
 	"backend/internal/integrations/simmarket"
 	"backend/internal/llm/fake"
+	"backend/internal/observability"
 	"backend/internal/repository"
 	"backend/internal/services"
 )
@@ -41,6 +42,9 @@ type App struct {
 
 	// SimHandler is nil unless MARKET_DATA_PROVIDER=simulated and MARKET_SIM_CONTROL_ENABLED=true (dev/test only).
 	SimHandler *handlers.SimHandler
+
+	// Metrics encapsulates Prometheus collectors and /metrics handler (story NW-19).
+	Metrics *observability.Metrics
 }
 
 func NewApp(cfg *config.Config) (*App, func() error, error) {
@@ -75,15 +79,18 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	provider, simHandler := newMarketProvider(warmCtx, cfg, httpClient)
 	marketHandler := handlers.NewMarketHandler(services.NewMarketService(provider))
 
+	metrics := observability.NewMetrics(nil)
+
 	// Live quotes (story NW-09): one poller per watched instrument, shared by every stream.
 	quoteHub := services.NewQuoteHub(provider, services.QuoteHubOptions{Interval: cfg.Market.StreamInterval})
+	quoteHub.SetMetricsObserver(metrics)
 	marketStreamHandler := handlers.NewMarketStreamHandler(quoteHub, handlers.StreamConfig{
 		Heartbeat:    cfg.Market.StreamHeartbeat,
 		WriteTimeout: cfg.Server.WriteTimeout,
 		MaxPerIP:     cfg.Market.StreamMaxPerIP,
 	})
-	log.Printf("market stream: poll every %s, heartbeat %s, at most %d streams per IP",
-		cfg.Market.StreamInterval, cfg.Market.StreamHeartbeat, cfg.Market.StreamMaxPerIP)
+	slog.Info("market stream configured",
+		"interval", cfg.Market.StreamInterval, "heartbeat", cfg.Market.StreamHeartbeat, "max_per_ip", cfg.Market.StreamMaxPerIP)
 
 	portfolioRepo := repository.NewPortfolioRepository(db)
 	portfolioService := services.NewPortfolioService(portfolioRepo, provider, userRepo)
@@ -98,6 +105,7 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	orderRepo := repository.NewOrderRepository(db)
 	orderService := services.NewOrderService(orderRepo, provider)
 	orderService.SetFillObserver(snapshotService)
+	orderService.SetMetricsObserver(metrics)
 	orderHandler := handlers.NewOrderHandler(orderService, authRepo)
 
 	watchlistRepo := repository.NewWatchlistRepository(db)
@@ -107,6 +115,7 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	// The LLM gateway (story NW-14): one provider, selected by LLM_PROVIDER, behind budget + usage ledger.
 	llm := newLLM(cfg)
 	gateway := services.NewAIGateway(llm, repository.NewAIUsageRepository(db), cfg.LLM.DailyTokenBudget, cfg.LLM.Timeout, cfg.LLM.Prices, time.Now)
+	gateway.SetMetricsObserver(metrics)
 	briefService := services.NewAIBriefService(gateway, provider, repository.NewAIBriefRepository(db), time.Now)
 	aiHandler := handlers.NewAIHandler(briefService, gateway, authRepo)
 
@@ -118,7 +127,7 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 
 	snapshotCtx, cancelSnapshots := context.WithCancel(context.Background())
 	go runSnapshotScheduler(snapshotCtx, newTimeTicker(cfg.Analytics.SnapshotInterval), snapshotService)
-	log.Printf("equity snapshots every %s, risk-free rate %.4f", cfg.Analytics.SnapshotInterval, cfg.Analytics.RiskFreeRate)
+	slog.Info("equity snapshots configured", "interval", cfg.Analytics.SnapshotInterval, "risk_free_rate", cfg.Analytics.RiskFreeRate)
 
 	closeApp := func() error {
 		quoteHub.Close()
@@ -151,6 +160,7 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 		AnalyticsHandler:    analyticsHandler,
 		AIHandler:           aiHandler,
 		AuthRepo:            authRepo,
+		Metrics:             metrics,
 	}, closeApp, nil
 }
 
@@ -163,9 +173,9 @@ func newMarketProvider(
 	httpClient *http.Client,
 ) (domain.MarketDataProvider, *handlers.SimHandler) {
 	if cfg.Market.Provider != config.MarketProviderSimulated {
-		log.Printf("market data provider: %s (%s)", config.MarketProviderAvanza, cfg.Avanza.BaseURL)
+		slog.Info("market data provider configured", "provider", config.MarketProviderAvanza, "base_url", cfg.Avanza.BaseURL)
 		if cfg.Market.SimControlEnabled {
-			log.Printf("WARNING: MARKET_SIM_CONTROL_ENABLED=true is ignored: sim control needs MARKET_DATA_PROVIDER=simulated")
+			slog.Warn("MARKET_SIM_CONTROL_ENABLED=true is ignored: sim control needs MARKET_DATA_PROVIDER=simulated")
 		}
 		return avanza.NewMarketProvider(httpClient, cfg.Avanza.BaseURL), nil
 	}
@@ -174,13 +184,12 @@ func newMarketProvider(
 	// instrument walks its price path from the epoch, so warm every instrument once at startup.
 	sim := simmarket.New(time.Now)
 	go warmSimMarket(ctx, sim)
-	log.Printf("market data provider: %s", config.MarketProviderSimulated)
+	slog.Info("market data provider configured", "provider", config.MarketProviderSimulated)
 
 	if !cfg.Market.SimControlEnabled {
 		return sim, nil
 	}
-	log.Printf("WARNING: DEV/TEST ONLY: sim control is enabled; PUT/DELETE /api/v1/sim/instruments/{id}/price " +
-		"are mounted without auth or rate limit. Never enable MARKET_SIM_CONTROL_ENABLED in production.")
+	slog.Warn("DEV/TEST ONLY: sim control is enabled; PUT/DELETE /api/v1/sim/instruments/{id}/price are mounted without auth or rate limit")
 	return sim, handlers.NewSimHandler(sim)
 }
 
@@ -193,10 +202,10 @@ func warmSimMarket(ctx context.Context, sim *simmarket.Market) {
 	start := time.Now()
 	items, err := sim.Search(ctx, "SIM")
 	if err != nil {
-		log.Printf("simulated market warm-up failed: %v", err)
+		slog.Error("simulated market warm-up failed", "error", err)
 		return
 	}
-	log.Printf("simulated market warmed: %d instruments in %s", len(items), time.Since(start).Round(time.Millisecond))
+	slog.Info("simulated market warmed", "instruments", len(items), "duration", time.Since(start).Round(time.Millisecond))
 }
 
 // newLLM builds the LLM provider selected by cfg.LLM.Provider. The fake answers deterministically and is
@@ -204,16 +213,16 @@ func warmSimMarket(ctx context.Context, sim *simmarket.Market) {
 // AI_UNAVAILABLE, but the rest of the API keeps working).
 func newLLM(cfg *config.Config) domain.LLM {
 	if cfg.LLM.Provider == config.LLMProviderFake {
-		log.Printf("WARNING: DEV/TEST ONLY: LLM provider: fake (deterministic answers, no model calls)")
+		slog.Warn("DEV/TEST ONLY: LLM provider fake enabled (deterministic answers, no model calls)")
 		return fake.New()
 	}
 	if cfg.LLM.AnthropicAPIKey == "" {
-		log.Printf("WARNING: LLM provider anthropic without ANTHROPIC_API_KEY: AI features will answer 503 AI_UNAVAILABLE")
+		slog.Warn("LLM provider anthropic without ANTHROPIC_API_KEY: AI features will answer 503 AI_UNAVAILABLE")
 	}
 	if _, ok := cfg.LLM.Prices[cfg.LLM.Model]; !ok {
-		log.Printf("WARNING: no price for LLM model %q: its usage is recorded with cost 0", cfg.LLM.Model)
+		slog.Warn("no price for LLM model: its usage is recorded with cost 0", "model", cfg.LLM.Model)
 	}
-	log.Printf("LLM provider: %s (model %s, timeout %s, daily budget %d tokens per user)",
-		config.LLMProviderAnthropic, cfg.LLM.Model, cfg.LLM.Timeout, cfg.LLM.DailyTokenBudget)
+	slog.Info("LLM provider configured",
+		"provider", config.LLMProviderAnthropic, "model", cfg.LLM.Model, "timeout", cfg.LLM.Timeout, "daily_budget", cfg.LLM.DailyTokenBudget)
 	return anthropic.New(cfg.LLM.AnthropicAPIKey, cfg.LLM.Model, cfg.LLM.AnthropicBaseURL)
 }
