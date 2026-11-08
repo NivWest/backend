@@ -171,7 +171,7 @@ func TestAIUsageHandler(t *testing.T) {
 					briefFeature = bf
 				}
 			}
-			if u.Date != "2026-11-08" || u.BudgetTokens != domain.DefaultAIDailyTokenBudget || len(u.ByFeature) != 2 ||
+			if u.Date != "2026-11-08" || u.BudgetTokens != domain.DefaultAIDailyTokenBudget || len(u.ByFeature) != 3 ||
 				briefFeature.Feature != domain.AIFeatureInstrumentBrief || briefFeature.Calls != tc.wantCalls {
 				t.Fatalf("usage = %s", w.Body.String())
 			}

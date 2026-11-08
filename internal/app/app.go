@@ -34,6 +34,7 @@ type App struct {
 	WatchlistHandler    *handlers.WatchlistHandler
 	AIHandler           *handlers.AIHandler
 	AnalyticsHandler    *handlers.AnalyticsHandler
+	InsightsHandler     *handlers.InsightsHandler
 	LearnHandler        *handlers.LearnHandler
 	VaultHandler        *handlers.VaultHandler
 	LeaderboardHandler  *handlers.LeaderboardHandler
@@ -154,6 +155,10 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	leaderboardService := services.NewLeaderboardService(leaderboardRepo, userRepo, analyticsService)
 	leaderboardHandler := handlers.NewLeaderboardHandler(leaderboardService, authRepo)
 
+	insightsReviewRepo := repository.NewInsightsReviewRepository(db)
+	insightsService := services.NewInsightsService(portfolioService, orderRepo, insightsReviewRepo, gateway, nil, time.Now)
+	insightsHandler := handlers.NewInsightsHandler(insightsService, authRepo)
+
 	// The guest purger runs until closeApp cancels its context: once now, then every GuestPurgeInterval.
 	guestRepo := repository.NewGuestRepository(db)
 	purger := services.NewGuestPurger(guestRepo, domain.GuestRetention, time.Now)
@@ -201,6 +206,7 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 		WatchlistHandler:    watchlistHandler,
 		AIHandler:           aiHandler,
 		AnalyticsHandler:    analyticsHandler,
+		InsightsHandler:     insightsHandler,
 		LearnHandler:        learnHandler,
 		VaultHandler:        vaultHandler,
 		LeaderboardHandler:  leaderboardHandler,

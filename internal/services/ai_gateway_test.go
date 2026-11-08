@@ -164,8 +164,10 @@ func TestAIGatewayUsageListsEveryFeature(t *testing.T) {
 		t.Fatal(err)
 	}
 	if empty.Date != "2026-11-08" || empty.BudgetTokens != 1000 || empty.UsedTokens != 0 || empty.RemainingTokens != 1000 ||
-		len(empty.ByFeature) != 2 || empty.ByFeature[0] != (domain.AIFeatureUsage{Feature: domain.AIFeatureInstrumentBrief}) ||
-		empty.ByFeature[1] != (domain.AIFeatureUsage{Feature: domain.AIFeatureKnowledgeAsk}) {
+		len(empty.ByFeature) != 3 ||
+		empty.ByFeature[0] != (domain.AIFeatureUsage{Feature: domain.AIFeatureInsightsReview}) ||
+		empty.ByFeature[1] != (domain.AIFeatureUsage{Feature: domain.AIFeatureInstrumentBrief}) ||
+		empty.ByFeature[2] != (domain.AIFeatureUsage{Feature: domain.AIFeatureKnowledgeAsk}) {
 		t.Fatalf("empty usage = %+v", empty)
 	}
 
@@ -177,7 +179,7 @@ func TestAIGatewayUsageListsEveryFeature(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := u.ByFeature[0]
+	f := u.ByFeature[1]
 	if u.UsedTokens != 1350 || u.RemainingTokens != 0 || f.Calls != 2 || f.InputTokens != 1000 || f.OutputTokens != 250 {
 		t.Fatalf("usage = %+v (remaining is clamped at 0)", u)
 	}

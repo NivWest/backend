@@ -37,6 +37,8 @@ tags:
     description: |
       AI features behind the LLM gateway (story NW-14): per-user daily token budget, a usage ledger and a
       deterministic fake provider (LLM_PROVIDER=fake). AI output is educational, never financial advice.
+  - name: Insights
+    description: Behavioral insights and deterministic trading pattern detectors (story NW-17).
   - name: Learn
     description: Knowledge base articles and search over trading concepts (story NW-15).
   - name: Vault
@@ -348,6 +350,10 @@ components:
           exclusiveMinimum: 0
           description: Required for (and only allowed on) STOP orders. SEK, at most 2 decimals.
           examples: [90]
+        note:
+          type: string
+          maxLength: 500
+          description: Optional trade thesis / note (≤ 500 characters).
       description: |
         A market order executes at once. LIMIT and STOP orders are good-till-cancelled and start OPEN.
 
@@ -378,7 +384,7 @@ components:
         - total = gross + commission (BUY, debited) or gross − commission (SELL, credited).
         A market order waits a simulated 50–500 ms before the price is read. fill_price, commission and total are
         null unless status is FILLED.
-      required: [id, orderbook_id, symbol, name, side, type, status, quantity, limit_price, stop_price, fill_price, commission, total, reject_reason, created_at, filled_at]
+      required: [id, orderbook_id, symbol, name, side, type, status, quantity, limit_price, stop_price, fill_price, commission, total, note, reject_reason, created_at, filled_at]
       properties:
         id:
           type: integer
@@ -413,6 +419,10 @@ components:
         total:
           type: [number, "null"]
           description: Cash debited (BUY) or credited (SELL) in SEK, 2 decimals. null unless FILLED.
+        note:
+          type: string
+          maxLength: 500
+          description: Trade thesis / note (empty string when none was given).
         reject_reason:
           type: [string, "null"]
           description: Why the matching engine rejected the order; null unless REJECTED.
@@ -595,7 +605,7 @@ components:
     AIFeature:
       type: string
       description: An AI feature that calls the LLM gateway. Each one has its own versioned prompt.
-      enum: [instrument_brief, knowledge_ask]
+      enum: [instrument_brief, insights_review, knowledge_ask]
 
     BriefMetric:
       type: object
@@ -795,6 +805,104 @@ components:
           type: array
           items: { $ref: "#/components/schemas/AllocationSlice" }
           description: Positions by value desc (then orderbook id asc), then the cash slice, which is always present.
+
+    OrderNoteRequest:
+      type: object
+      required: [note]
+      properties:
+        note:
+          type: string
+          maxLength: 500
+          description: Updated trade thesis / note (≤ 500 characters).
+
+    DetectorID:
+      type: string
+      enum: [concentration, revenge_trading, overtrading, disposition_effect, no_thesis]
+
+    DetectorEvidence:
+      type: object
+      required: [order_ids]
+      properties:
+        order_ids:
+          type: array
+          items: { type: integer, format: int64 }
+          description: Orders cited as evidence for this detector.
+        metrics:
+          type: object
+          additionalProperties: true
+          description: Key metrics computed by the detector.
+
+    DetectorResult:
+      type: object
+      required: [id, title, triggered, severity, evidence, explanation]
+      properties:
+        id:
+          $ref: "#/components/schemas/DetectorID"
+        title:
+          type: string
+        triggered:
+          type: boolean
+        severity:
+          type: string
+          enum: [info, warning, critical]
+        evidence:
+          $ref: "#/components/schemas/DetectorEvidence"
+        explanation:
+          type: string
+
+    Insights:
+      type: object
+      required: [generated_at, detectors]
+      properties:
+        generated_at:
+          type: string
+          format: date-time
+        detectors:
+          type: array
+          items: { $ref: "#/components/schemas/DetectorResult" }
+
+    ReviewObservation:
+      type: object
+      required: [detector_id, narrative, order_ids]
+      properties:
+        detector_id:
+          type: string
+        narrative:
+          type: string
+        order_ids:
+          type: array
+          items: { type: integer, format: int64 }
+
+    InsightsReview:
+      type: object
+      required: [id, generated_at, headline, observations, habit_to_try, disclaimer]
+      properties:
+        id:
+          type: integer
+          format: int64
+        generated_at:
+          type: string
+          format: date-time
+        headline:
+          type: string
+        observations:
+          type: array
+          items: { $ref: "#/components/schemas/ReviewObservation" }
+        habit_to_try:
+          type: string
+        disclaimer:
+          type: string
+          enum: ["AI-generated · educational, not financial advice"]
+
+    InsightsReviewListResponse:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/InsightsReview" }
+        next_cursor:
+          type: [string, "null"]
 
     Vault:
       type: object
@@ -1121,11 +1229,6 @@ components:
       schema: { type: string, minLength: 1 }
       examples:
         slippage: { value: slippage }
-    OrderID:
-      name: id
-      in: path
-      required: true
-      schema: { type: integer, format: int64, minimum: 1 }
     OrderbookID:
       name: orderbook_id
       in: path
@@ -1134,6 +1237,11 @@ components:
       examples:
         simulated: { value: SIM-FJRD }
     WatchlistID:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
+    OrderID:
       name: id
       in: path
       required: true
@@ -1726,6 +1834,7 @@ paths:
                 fill_price: 94.89
                 commission: 2.37
                 total: 951.27
+                note: ""
                 reject_reason: null
                 created_at: "2026-11-08T09:41:00Z"
                 filled_at: "2026-11-08T09:41:03Z"
@@ -1762,6 +1871,40 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
               example: { error: "order is not open", code: ORDER_NOT_OPEN }
+
+  /orders/{id}/note:
+    parameters:
+      - $ref: "#/components/parameters/OrderID"
+    patch:
+      summary: Update the note / trade thesis on an order
+      description: |
+        Updates the trade note of one of the signed-in user's orders (story NW-17).
+        On another user's order it returns 404 ORDER_NOT_FOUND.
+      operationId: updateOrderNote
+      tags: [Orders]
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrderNoteRequest" }
+            example: { note: "Long-term thesis on green energy" }
+      responses:
+        "200":
+          description: Note updated; the updated order.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "400":
+          description: Note is longer than 500 characters or invalid order id.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "note must be at most 500 characters", code: VALIDATION_ERROR }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/OrderNotFound"
 
   # Watchlists (story NW-06). Every route needs a session and only sees the caller's own lists:
   # another user's list id is 404 WATCHLIST_NOT_FOUND, never 403. Items are keyed by orderbook_id.
@@ -2144,6 +2287,121 @@ paths:
                     allocation:
                       - { label: FJRD, orderbook_id: SIM-FJRD, value: 10000.00, weight: 10.00 }
                       - { label: Cash, orderbook_id: null, value: 89964.97, weight: 90.00 }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+
+  /insights:
+    get:
+      summary: Behavioral insights and pattern detection results
+      description: |
+        Evaluates 5 deterministic behavioral bias detectors against the signed-in user's orders and portfolio:
+        concentration, revenge trading, overtrading, disposition effect and missing trade theses (story NW-17).
+      operationId: getInsights
+      tags: [Insights]
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: Evaluated detectors for the signed-in user.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Insights" }
+              example:
+                generated_at: "2026-11-08T14:30:00Z"
+                detectors:
+                  - id: concentration
+                    title: Position concentration
+                    triggered: true
+                    severity: warning
+                    evidence:
+                      order_ids: [42]
+                      metrics: { weight: 50.0, threshold: 40.0 }
+                    explanation: One position exceeds 40% of total equity.
+                  - id: revenge_trading
+                    title: Revenge trading
+                    triggered: false
+                    severity: warning
+                    evidence: { order_ids: [] }
+                    explanation: Quick buying following a loss.
+                  - id: overtrading
+                    title: Overtrading
+                    triggered: false
+                    severity: warning
+                    evidence: { order_ids: [] }
+                    explanation: Excessive daily order frequency.
+                  - id: disposition_effect
+                    title: Disposition effect
+                    triggered: false
+                    severity: warning
+                    evidence: { order_ids: [] }
+                    explanation: Selling winners prematurely while riding losing positions.
+                  - id: no_thesis
+                    title: Missing trade thesis
+                    triggered: false
+                    severity: info
+                    evidence: { order_ids: [] }
+                    explanation: Placing trades without documenting rationale.
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+
+  /ai/insights/review:
+    post:
+      summary: Generate an AI weekly review of behavioral patterns
+      description: |
+        Generates an educational review of the signed-in user's detected behavioral patterns with
+        server-side validated citations to real user orders (story NW-17).
+      operationId: generateInsightsReview
+      tags: [AI]
+      security: [{ sessionCookie: [] }]
+      responses:
+        "201":
+          description: Created review.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InsightsReview" }
+              example:
+                id: 1
+                generated_at: "2026-11-08T14:30:00Z"
+                headline: "FAKE: weekly review"
+                observations:
+                  - detector_id: concentration
+                    narrative: "FAKE: Position concentration"
+                    order_ids: [42]
+                habit_to_try: "Set a maximum allocation limit per stock before trading."
+                disclaimer: "AI-generated · educational, not financial advice"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "422":
+          $ref: "#/components/responses/AIRefused"
+        "429":
+          $ref: "#/components/responses/AIBudgetExceeded"
+        "503":
+          $ref: "#/components/responses/AIUnavailable"
+
+  /ai/insights/reviews:
+    get:
+      summary: List historical behavioral insight reviews
+      description: Returns historical reviews for the signed-in user, newest first.
+      operationId: listInsightsReviews
+      tags: [AI]
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: List of reviews.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InsightsReviewListResponse" }
+              example:
+                items:
+                  - id: 1
+                    generated_at: "2026-11-08T14:30:00Z"
+                    headline: "FAKE: weekly review"
+                    observations:
+                      - detector_id: concentration
+                        narrative: "FAKE: Position concentration"
+                        order_ids: [42]
+                    habit_to_try: "Set a maximum allocation limit per stock before trading."
+                    disclaimer: "AI-generated · educational, not financial advice"
+                next_cursor: null
         "401":
           $ref: "#/components/responses/Unauthenticated"
 

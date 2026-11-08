@@ -10,9 +10,10 @@ import (
 )
 
 var (
-	_ domain.AIUsageRepository = (*AIUsageRepo)(nil)
-	_ domain.AIBriefRepository = (*AIBriefRepo)(nil)
-	_ domain.LLM               = (*LLM)(nil)
+	_ domain.AIUsageRepository        = (*AIUsageRepo)(nil)
+	_ domain.AIBriefRepository        = (*AIBriefRepo)(nil)
+	_ domain.InsightsReviewRepository = (*InsightsReviewRepo)(nil)
+	_ domain.LLM                      = (*LLM)(nil)
 )
 
 // ---------------------------------------------------------------------------
@@ -172,4 +173,51 @@ func (l *LLM) Calls() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return len(l.Requests)
+}
+
+// ---------------------------------------------------------------------------
+// InsightsReviewRepository
+// ---------------------------------------------------------------------------
+
+// InsightsReviewRepo is an in-memory domain.InsightsReviewRepository.
+type InsightsReviewRepo struct {
+	mu        sync.Mutex
+	Reviews   map[uint][]domain.InsightsReview
+	NextID    uint
+	CreateErr error
+	ListErr   error
+}
+
+func NewInsightsReviewRepo() *InsightsReviewRepo {
+	return &InsightsReviewRepo{Reviews: map[uint][]domain.InsightsReview{}}
+}
+
+func (r *InsightsReviewRepo) Create(_ context.Context, review *domain.InsightsReview, userID uint, _, _ string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.CreateErr != nil {
+		return r.CreateErr
+	}
+	if r.Reviews == nil {
+		r.Reviews = map[uint][]domain.InsightsReview{}
+	}
+	r.NextID++
+	review.ID = r.NextID
+	r.Reviews[userID] = append([]domain.InsightsReview{*review}, r.Reviews[userID]...)
+	return nil
+}
+
+func (r *InsightsReviewRepo) List(_ context.Context, userID uint, limit int) ([]domain.InsightsReview, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.ListErr != nil {
+		return nil, r.ListErr
+	}
+	items := r.Reviews[userID]
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	out := make([]domain.InsightsReview, len(items))
+	copy(out, items)
+	return out, nil
 }

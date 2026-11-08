@@ -88,6 +88,7 @@ type OrderRequest struct {
 	Type        OrderType        `json:"type,omitempty"`
 	LimitPrice  *decimal.Decimal `json:"limit_price,omitempty"`
 	StopPrice   *decimal.Decimal `json:"stop_price,omitempty"`
+	Note        string           `json:"note,omitempty"`
 }
 
 // Order is an order and, once FILLED, its fill (#/components/schemas/Order). Symbol and Name come from the
@@ -108,8 +109,9 @@ type Order struct {
 	FillPrice  decimal.Decimal
 	Commission decimal.Decimal
 	// Total is the cash moved: gross + commission for a BUY (debited), gross − commission for a SELL (credited).
-	Total decimal.Decimal
-	// RejectReason is set when Status is REJECTED.
+	Total        decimal.Decimal
+	Note         string
+	RealizedPnL  *decimal.Decimal
 	RejectReason *string
 	CreatedAt    time.Time
 	FilledAt     *time.Time
@@ -129,6 +131,7 @@ type orderJSON struct {
 	FillPrice    *json.Number `json:"fill_price"`
 	Commission   *json.Number `json:"commission"`
 	Total        *json.Number `json:"total"`
+	Note         string       `json:"note"`
 	RejectReason *string      `json:"reject_reason"`
 	CreatedAt    time.Time    `json:"created_at"`
 	FilledAt     *time.Time   `json:"filled_at"`
@@ -166,6 +169,7 @@ func (o Order) MarshalJSON() ([]byte, error) {
 		Quantity:     json.Number(o.Quantity.Round(4).String()),
 		LimitPrice:   optionalMoney(o.LimitPrice),
 		StopPrice:    optionalMoney(o.StopPrice),
+		Note:         o.Note,
 		RejectReason: o.RejectReason,
 		CreatedAt:    o.CreatedAt.UTC(),
 		FilledAt:     filledAt,
@@ -195,6 +199,7 @@ type ExecuteOrderParams struct {
 	Commission decimal.Decimal
 	// Total is debited from (BUY) or credited to (SELL) the user's balance.
 	Total decimal.Decimal
+	Note  string
 	// IdempotencyKey is "" when the request had no Idempotency-Key header (stored as NULL).
 	IdempotencyKey string
 }
@@ -211,6 +216,7 @@ type PendingOrderParams struct {
 	StopPrice  *decimal.Decimal
 	// ReservedCash is the BUY reservation (see services.ReservationFor); zero for a SELL, which reserves Quantity.
 	ReservedCash decimal.Decimal
+	Note         string
 	// IdempotencyKey is "" when the request had no Idempotency-Key header (stored as NULL).
 	IdempotencyKey string
 }
@@ -257,4 +263,10 @@ type OrderRepository interface {
 	// stock row (soft-deleted stocks included). It returns an empty, non-nil slice when there are none
 	// (story NW-05).
 	ListByUser(ctx context.Context, userID uint, before *OrderCursor, limit int, statuses ...OrderStatus) ([]Order, error)
+
+	// ListAllByUser returns all orders of the user, ordered by created_at asc.
+	ListAllByUser(ctx context.Context, userID uint) ([]Order, error)
+
+	// UpdateNote updates the note on an order owned by userID (story NW-17).
+	UpdateNote(ctx context.Context, userID, orderID uint, note string) (*Order, error)
 }

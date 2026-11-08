@@ -30,6 +30,7 @@ func Migrate(db *gorm.DB) error {
 		&models.AIUsage{},
 		&models.AIInstrumentBrief{},
 		&models.EquitySnapshot{},
+		&models.AIInsightReview{},
 		&models.KBArticle{},
 		&models.KBChunk{},
 		&models.VaultAccount{},

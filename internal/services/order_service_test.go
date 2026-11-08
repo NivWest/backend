@@ -683,3 +683,46 @@ func TestOrderService_PlaceOrder_WithoutObserver(t *testing.T) {
 		t.Fatalf("PlaceOrder() = %v, %v", created, err)
 	}
 }
+
+func TestOrderService_PlaceAndUpdateNote(t *testing.T) {
+	repo := &testutil.OrderRepo{}
+	svc := newTestOrderService(repo, fjrdProvider())
+	ctx := context.Background()
+
+	// Note > 500 characters on PlaceOrder
+	reqLong := buy("1")
+	reqLong.Note = strings.Repeat("a", 501)
+	if _, _, err := svc.PlaceOrder(ctx, 1, "", reqLong); err == nil {
+		t.Fatal("expected ValidationError for note > 500 chars on PlaceOrder")
+	}
+
+	// PlaceOrder with trimmed note
+	reqValid := buy("1")
+	reqValid.Note = "  My trade thesis  "
+	order, created, err := svc.PlaceOrder(ctx, 1, "", reqValid)
+	if err != nil || !created {
+		t.Fatalf("PlaceOrder() = %v, %v", created, err)
+	}
+	if order.Note != "My trade thesis" {
+		t.Errorf("order.Note = %q, want %q", order.Note, "My trade thesis")
+	}
+
+	// UpdateNote valid
+	updated, err := svc.UpdateNote(ctx, 1, order.ID, "  Updated thesis  ")
+	if err != nil {
+		t.Fatalf("UpdateNote() error = %v", err)
+	}
+	if updated.Note != "Updated thesis" {
+		t.Errorf("updated.Note = %q, want %q", updated.Note, "Updated thesis")
+	}
+
+	// UpdateNote > 500 chars
+	if _, err := svc.UpdateNote(ctx, 1, order.ID, strings.Repeat("b", 501)); err == nil {
+		t.Fatal("expected ValidationError for note > 500 chars on UpdateNote")
+	}
+
+	// UpdateNote on another user's order returns ErrOrderNotFound
+	if _, err := svc.UpdateNote(ctx, 2, order.ID, "other user"); !errors.Is(err, domain.ErrOrderNotFound) {
+		t.Errorf("UpdateNote(other user) error = %v, want ErrOrderNotFound", err)
+	}
+}

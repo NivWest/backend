@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/shopspring/decimal"
 
@@ -118,6 +119,7 @@ func (s *OrderService) PlaceOrder(ctx context.Context, userID uint, idempotencyK
 		FillPrice:      pricing.FillPrice,
 		Commission:     pricing.Commission,
 		Total:          pricing.Total,
+		Note:           req.Note,
 		IdempotencyKey: idempotencyKey,
 	})
 	if err != nil {
@@ -155,6 +157,7 @@ func (s *OrderService) placePending(ctx context.Context, userID uint, idempotenc
 		LimitPrice:     req.LimitPrice,
 		StopPrice:      req.StopPrice,
 		ReservedCash:   ReservationFor(req.Side, req.Type, req.Quantity, req.LimitPrice, req.StopPrice),
+		Note:           req.Note,
 		IdempotencyKey: idempotencyKey,
 	})
 	if err != nil {
@@ -222,6 +225,19 @@ func (s *OrderService) ListOrders(ctx context.Context, userID uint, limit int, c
 	return page, nil
 }
 
+// UpdateNote updates the thesis / note on an executed order (story NW-17).
+func (s *OrderService) UpdateNote(ctx context.Context, userID, orderID uint, note string) (*domain.Order, error) {
+	if utf8.RuneCountInString(note) > 500 {
+		return nil, &domain.ValidationError{Msg: "note must be at most 500 characters"}
+	}
+	return s.repo.UpdateNote(ctx, userID, orderID, strings.TrimSpace(note))
+}
+
+// ListAllOrders returns all orders of the user (story NW-17).
+func (s *OrderService) ListAllOrders(ctx context.Context, userID uint) ([]domain.Order, error) {
+	return s.repo.ListAllByUser(ctx, userID)
+}
+
 // replay returns an order stored under the request's idempotency key, provided it was placed with the
 // same orderbook_id, side, quantity, type and limit/stop price; otherwise the key was reused for a different order.
 func replay(existing *domain.Order, req domain.OrderRequest) (*domain.Order, bool, error) {
@@ -284,6 +300,10 @@ func normalizeOrderRequest(req domain.OrderRequest) (domain.OrderRequest, error)
 	default:
 		return req, &domain.ValidationError{Msg: "type must be MARKET, LIMIT or STOP"}
 	}
+	if utf8.RuneCountInString(req.Note) > 500 {
+		return req, &domain.ValidationError{Msg: "note must be at most 500 characters"}
+	}
+	req.Note = strings.TrimSpace(req.Note)
 	return req, nil
 }
 

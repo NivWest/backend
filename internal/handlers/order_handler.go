@@ -40,6 +40,7 @@ func (h *OrderHandler) Register(v1 *gin.RouterGroup) {
 	orders.POST("", h.PlaceOrder)
 	orders.GET("/:id", h.GetOrder)
 	orders.DELETE("/:id", h.CancelOrder)
+	orders.PATCH("/:id/note", h.UpdateOrderNote)
 }
 
 // GetOrder handles GET /orders/{id}: 200 with the signed-in user's order, 404 ORDER_NOT_FOUND for an unknown
@@ -189,6 +190,36 @@ func decodeOrderRequest(c *gin.Context) (domain.OrderRequest, error) {
 	return req, nil
 }
 
+// UpdateOrderNote handles PATCH /orders/:id/note (story NW-17).
+func (h *OrderHandler) UpdateOrderNote(c *gin.Context) {
+	user, ok := middleware.CurrentUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, domain.ErrorResponse{Error: "authentication required", Code: domain.CodeUnauthenticated})
+		return
+	}
+
+	orderID64, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || orderID64 == 0 {
+		c.JSON(http.StatusBadRequest, domain.ErrorResponse{Error: "invalid order id", Code: domain.CodeValidation})
+		return
+	}
+
+	var req struct {
+		Note string `json:"note"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, domain.ErrorResponse{Error: "request body must be {note: string}", Code: domain.CodeValidation})
+		return
+	}
+
+	order, err := h.service.UpdateNote(c.Request.Context(), user.ID, uint(orderID64), req.Note)
+	if err != nil {
+		writeOrderError(c, user.ID, err)
+		return
+	}
+	c.JSON(http.StatusOK, order)
+}
+
 // writeOrderError maps PlaceOrder errors to their HTTP status and domain.ErrorResponse body. Unexpected
 // errors are logged with the user id only (never the session or the email).
 func writeOrderError(c *gin.Context, userID uint, err error) {
@@ -196,14 +227,14 @@ func writeOrderError(c *gin.Context, userID uint, err error) {
 	switch {
 	case errors.As(err, &validation):
 		c.JSON(http.StatusBadRequest, domain.ErrorResponse{Error: validation.Msg, Code: domain.CodeValidation})
+	case errors.Is(err, domain.ErrOrderNotFound):
+		c.JSON(http.StatusNotFound, domain.ErrorResponse{Error: "order not found", Code: domain.CodeOrderNotFound})
 	case errors.Is(err, domain.ErrInstrumentNotFound):
 		c.JSON(http.StatusNotFound, domain.ErrorResponse{Error: domain.ErrInstrumentNotFound.Error(), Code: domain.CodeInstrumentNotFound})
 	case errors.Is(err, domain.ErrInsufficientFunds):
 		c.JSON(http.StatusUnprocessableEntity, domain.ErrorResponse{Error: "not enough cash for this order", Code: domain.CodeInsufficientFunds})
 	case errors.Is(err, domain.ErrInsufficientShares):
 		c.JSON(http.StatusUnprocessableEntity, domain.ErrorResponse{Error: "not enough shares to sell", Code: domain.CodeInsufficientShares})
-	case errors.Is(err, domain.ErrOrderNotFound):
-		c.JSON(http.StatusNotFound, domain.ErrorResponse{Error: domain.ErrOrderNotFound.Error(), Code: domain.CodeOrderNotFound})
 	case errors.Is(err, domain.ErrOrderNotOpen):
 		c.JSON(http.StatusConflict, domain.ErrorResponse{Error: domain.ErrOrderNotOpen.Error(), Code: domain.CodeOrderNotOpen})
 	case errors.Is(err, domain.ErrIdempotencyKeyReused):

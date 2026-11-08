@@ -113,6 +113,8 @@ type Order struct {
 	StopPrice      decimal.NullDecimal `gorm:"type:numeric(18,2)" json:"stop_price"`
 	ReservedCash   decimal.Decimal     `gorm:"type:numeric(18,2);not null;default:0" json:"-"`
 	RejectReason   *string             `gorm:"size:255" json:"reject_reason"`
+	Note           string              `gorm:"type:varchar(500);not null;default:''" json:"note"`
+	RealizedPnL    *decimal.Decimal    `gorm:"column:realized_pnl;type:numeric(18,2)" json:"realized_pnl,omitempty"`
 	IdempotencyKey *string             `gorm:"size:255;uniqueIndex:idx_orders_user_idempotency_key,priority:2" json:"-"`
 	CreatedAt      time.Time           `gorm:"index:idx_orders_user_created_id,priority:2" json:"created_at"` // Order history keyset (NW-05)
 	UpdatedAt      time.Time           `json:"updated_at"`
@@ -181,6 +183,20 @@ type EquitySnapshot struct {
 	HoldingsValue decimal.Decimal `gorm:"type:numeric(18,2);not null" json:"holdings_value"`
 	VaultValue    decimal.Decimal `gorm:"type:numeric(18,2);not null;default:0" json:"vault_value"`
 	Equity        decimal.Decimal `gorm:"type:numeric(18,2);not null" json:"equity"`
+}
+
+// AIInsightReview stores a generated behavioral review for a user (story NW-17).
+type AIInsightReview struct {
+	ID               uint      `gorm:"primaryKey" json:"id"`
+	UserID           uint      `gorm:"not null;index:idx_ai_insight_reviews_user_created,priority:1;constraint:OnDelete:CASCADE;" json:"user_id"`
+	Headline         string    `gorm:"type:varchar(200);not null" json:"headline"`
+	ObservationsJSON string    `gorm:"column:observations_json;type:text;not null" json:"-"`
+	HabitToTry       string    `gorm:"type:varchar(500);not null" json:"habit_to_try"`
+	Disclaimer       string    `gorm:"type:varchar(120);not null" json:"disclaimer"`
+	Model            string    `gorm:"type:varchar(80);not null" json:"model"`
+	PromptVersion    string    `gorm:"type:varchar(60);not null" json:"prompt_version"`
+	GeneratedAt      time.Time `gorm:"not null;index:idx_ai_insight_reviews_user_created,priority:2" json:"generated_at"`
+	CreatedAt        time.Time `gorm:"not null" json:"created_at"`
 }
 
 // KBArticle is one knowledge base article seeded from markdown (story NW-15).

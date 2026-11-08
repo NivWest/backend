@@ -25,8 +25,14 @@ func runInstrumentBrief(req domain.LLMRequest) (string, []domain.LLMCitation, er
 	return out, nil, err
 }
 
+func runInsightsReview(req domain.LLMRequest) (string, []domain.LLMCitation, error) {
+	out, err := insightsReview(req)
+	return out, nil, err
+}
+
 var scripts = map[domain.AIFeature]script{
 	domain.AIFeatureInstrumentBrief: runInstrumentBrief,
+	domain.AIFeatureInsightsReview:  runInsightsReview,
 	domain.AIFeatureKnowledgeAsk:    knowledgeAsk,
 }
 
