@@ -149,8 +149,9 @@ func TestAIUsageHandler(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &u); err != nil {
 				t.Fatal(err)
 			}
-			if u.Date != "2026-11-08" || u.BudgetTokens != domain.DefaultAIDailyTokenBudget || len(u.ByFeature) != 1 ||
-				u.ByFeature[0].Feature != domain.AIFeatureInstrumentBrief || u.ByFeature[0].Calls != tc.wantCalls {
+			if u.Date != "2026-11-08" || u.BudgetTokens != domain.DefaultAIDailyTokenBudget || len(u.ByFeature) != 2 ||
+				u.ByFeature[0].Feature != domain.AIFeatureInsightsReview ||
+				u.ByFeature[1].Feature != domain.AIFeatureInstrumentBrief || u.ByFeature[1].Calls != tc.wantCalls {
 				t.Fatalf("usage = %s", w.Body.String())
 			}
 			if (tc.wantCalls > 0) != (u.UsedTokens > 0) || u.RemainingTokens != u.BudgetTokens-u.UsedTokens {
