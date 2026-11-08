@@ -37,6 +37,8 @@ tags:
     description: |
       AI features behind the LLM gateway (story NW-14): per-user daily token budget, a usage ledger and a
       deterministic fake provider (LLM_PROVIDER=fake). AI output is educational, never financial advice.
+  - name: Learn
+    description: Knowledge base articles and search over trading concepts (story NW-15).
 
 components:
   securitySchemes:
@@ -67,6 +69,7 @@ components:
         - WATCHLIST_NOT_FOUND
         - WATCHLIST_ITEM_NOT_FOUND
         - WATCHLIST_LIMIT_REACHED
+        - ARTICLE_NOT_FOUND
         - AI_BUDGET_EXCEEDED
         - AI_REFUSED
         - AI_UNAVAILABLE
@@ -621,7 +624,7 @@ components:
     AIFeature:
       type: string
       description: An AI feature that calls the LLM gateway. Each one has its own versioned prompt.
-      enum: [instrument_brief]
+      enum: [instrument_brief, knowledge_ask]
 
     BriefMetric:
       type: object
@@ -729,6 +732,125 @@ components:
           type: array
           items: { $ref: "#/components/schemas/AIFeatureUsage" }
 
+    ArticleSummary:
+      type: object
+      description: Summary of a knowledge base article (story NW-15).
+      required: [slug, title, summary, tags]
+      properties:
+        slug:
+          type: string
+          examples: [slippage]
+        title:
+          type: string
+          examples: ["Slippage: Why Orders Fill Off-Price"]
+        summary:
+          type: string
+          examples: ["How execution latency and volume affect order fill prices."]
+        tags:
+          type: array
+          items: { type: string }
+          examples: [[execution, risk]]
+
+    ArticleListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ArticleSummary" }
+
+    Article:
+      type: object
+      description: Full knowledge base article with markdown content (story NW-15).
+      required: [slug, title, summary, tags, body_markdown, updated_at]
+      properties:
+        slug:
+          type: string
+          examples: [slippage]
+        title:
+          type: string
+          examples: ["Slippage: Why Orders Fill Off-Price"]
+        summary:
+          type: string
+          examples: ["How execution latency and volume affect order fill prices."]
+        tags:
+          type: array
+          items: { type: string }
+        body_markdown:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+
+    ArticleSearchResult:
+      type: object
+      description: One search result chunk from the knowledge base (story NW-15).
+      required: [slug, title, chunk_id, snippet]
+      properties:
+        slug:
+          type: string
+          examples: [slippage]
+        title:
+          type: string
+          examples: ["Slippage: Why Orders Fill Off-Price"]
+        chunk_id:
+          type: string
+          examples: [slippage-what-is-slippage]
+        snippet:
+          type: string
+          examples: ["<b>Slippage</b> is the difference between expected and executed price..."]
+
+    ArticleSearchResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ArticleSearchResult" }
+
+    AskRequest:
+      type: object
+      required: [question]
+      properties:
+        question:
+          type: string
+          minLength: 1
+          maxLength: 500
+          examples: ["What is slippage?"]
+
+    Citation:
+      type: object
+      required: [article_slug, article_title, chunk_id, quoted_text]
+      properties:
+        article_slug:
+          type: string
+          examples: [slippage]
+        article_title:
+          type: string
+          examples: ["Slippage: Why Orders Fill Off-Price"]
+        chunk_id:
+          type: string
+          examples: [slippage-what-is-slippage]
+        quoted_text:
+          type: string
+          examples: ["Slippage is the difference between the expected price and executed price."]
+
+    AskResponse:
+      type: object
+      required: [answer, citations, model, disclaimer]
+      properties:
+        answer:
+          type: string
+        citations:
+          type: array
+          items: { $ref: "#/components/schemas/Citation" }
+        model:
+          type: string
+          examples: [fake]
+        disclaimer:
+          type: string
+          enum: ["AI-generated · educational, not financial advice"]
+
   responses:
     Unauthenticated:
       description: Missing, unknown or expired session.
@@ -798,8 +920,21 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
           example: { error: "the AI service is unavailable, please try again later", code: AI_UNAVAILABLE }
+    ArticleNotFound:
+      description: No article exists for the requested slug (story NW-15).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: "article not found", code: ARTICLE_NOT_FOUND }
 
   parameters:
+    ArticleSlug:
+      name: slug
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+      examples:
+        slippage: { value: slippage }
     OrderbookID:
       name: orderbook_id
       in: path
@@ -1625,3 +1760,108 @@ paths:
                   - { feature: instrument_brief, calls: 1, input_tokens: 350, output_tokens: 62 }
         "401":
           $ref: "#/components/responses/Unauthenticated"
+
+  /ai/ask:
+    post:
+      summary: Ask a question answered by the knowledge base with citations
+      description: |
+        Answers a trading question using retrieval-augmented generation over TradeEdu knowledge base articles.
+        If no relevant chunks are found, returns an abstain answer without calling the LLM.
+      operationId: askKnowledge
+      tags: [AI]
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AskRequest" }
+      responses:
+        "200":
+          description: Answer with citations or abstain response.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AskResponse" }
+              example:
+                answer: "Slippage is the difference between the expected price and the execution price."
+                citations:
+                  - article_slug: slippage
+                    article_title: "Slippage: Why Orders Fill Off-Price"
+                    chunk_id: slippage-what-is-slippage
+                    quoted_text: "Slippage is the difference between expected price of a trade and the price at which the trade is executed."
+                model: fake
+                disclaimer: "AI-generated · educational, not financial advice"
+        "400":
+          description: Question is empty or exceeds 500 characters.
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "422":
+          $ref: "#/components/responses/AIRefused"
+        "429":
+          $ref: "#/components/responses/AIBudgetExceeded"
+        "503":
+          $ref: "#/components/responses/AIUnavailable"
+
+  /learn/articles:
+    get:
+      summary: List all knowledge base articles
+      description: Returns summaries and tags of all knowledge base articles. Public and unauthenticated.
+      operationId: listArticles
+      tags: [Learn]
+      responses:
+        "200":
+          description: List of articles.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ArticleListResponse" }
+              example:
+                items:
+                  - slug: slippage
+                    title: "Slippage: Why Orders Fill Off-Price"
+                    summary: "How execution latency and volume affect order fill prices."
+                    tags: [execution, risk]
+
+  /learn/articles/{slug}:
+    get:
+      summary: Get one article by slug
+      description: Returns the full article including markdown body and update timestamp.
+      operationId: getArticle
+      tags: [Learn]
+      parameters:
+        - $ref: "#/components/parameters/ArticleSlug"
+      responses:
+        "200":
+          description: Full article details.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Article" }
+        "404":
+          $ref: "#/components/responses/ArticleNotFound"
+
+  /learn/search:
+    get:
+      summary: Search knowledge base articles using full-text search
+      description: Performs full-text search across article chunks with ranking and headline snippets.
+      operationId: searchArticles
+      tags: [Learn]
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string }
+          description: Search query. Cannot be blank.
+      responses:
+        "200":
+          description: Matching article chunks ordered by relevance.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ArticleSearchResponse" }
+              example:
+                items:
+                  - slug: slippage
+                    title: "Slippage: Why Orders Fill Off-Price"
+                    chunk_id: slippage-what-is-slippage
+                    snippet: "<b>Slippage</b> is the difference between the expected price and executed price."
+        "400":
+          description: Query parameter q is empty or blank.
+          $ref: "#/components/responses/ValidationError"
