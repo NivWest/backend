@@ -30,11 +30,17 @@ func Migrate(db *gorm.DB) error {
 		&models.AIUsage{},
 		&models.AIInstrumentBrief{},
 		&models.EquitySnapshot{},
+		&models.KBArticle{},
+		&models.KBChunk{},
 		&models.VaultAccount{},
 		&models.VaultTransaction{},
 		&models.LeaderboardEntry{},
 	); err != nil {
 		return fmt.Errorf("auto migrate: %w", err)
+	}
+
+	if err := migrateKBChunksSearch(db); err != nil {
+		return err
 	}
 
 	// Case-insensitive unique index for display_name (story NW-13).
@@ -110,6 +116,24 @@ func dedupeWatchlistItems(db *gorm.DB) error {
 func backfillAvgCost(db *gorm.DB) error {
 	if err := db.Exec(`UPDATE positions SET avg_cost = avg_price WHERE avg_cost = 0`).Error; err != nil {
 		return fmt.Errorf("backfill positions.avg_cost: %w", err)
+	}
+	return nil
+}
+
+// migrateKBChunksSearch creates the generated tsvector column and GIN index for full-text search (story NW-15).
+// AutoMigrate cannot express generated columns or GIN indexes. Idempotent.
+func migrateKBChunksSearch(db *gorm.DB) error {
+	if db.Dialector.Name() != "postgres" {
+		return nil
+	}
+	stmt := `ALTER TABLE kb_chunks ADD COLUMN IF NOT EXISTS search tsvector GENERATED ALWAYS AS (
+		to_tsvector('english', coalesce(article_title, '') || ' ' || coalesce(heading, '') || ' ' || coalesce(content, ''))
+	) STORED`
+	if err := db.Exec(stmt).Error; err != nil {
+		return fmt.Errorf("kb_chunks.search tsvector: %w", err)
+	}
+	if err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_kb_chunks_search ON kb_chunks USING gin(search)`).Error; err != nil {
+		return fmt.Errorf("idx_kb_chunks_search gin index: %w", err)
 	}
 	return nil
 }

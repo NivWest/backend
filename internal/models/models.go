@@ -183,6 +183,32 @@ type EquitySnapshot struct {
 	Equity        decimal.Decimal `gorm:"type:numeric(18,2);not null" json:"equity"`
 }
 
+// KBArticle is one knowledge base article seeded from markdown (story NW-15).
+type KBArticle struct {
+	ID           uint      `gorm:"primaryKey" json:"id"`
+	Slug         string    `gorm:"type:varchar(80);not null;uniqueIndex" json:"slug"`
+	Title        string    `gorm:"type:varchar(160);not null" json:"title"`
+	Summary      string    `gorm:"type:text;not null" json:"summary"`
+	Tags         string    `gorm:"type:text;not null" json:"tags"` // JSON array string
+	BodyMarkdown string    `gorm:"type:text;not null" json:"body_markdown"`
+	ContentHash  string    `gorm:"type:varchar(64);not null" json:"content_hash"`
+	CreatedAt    time.Time `gorm:"not null" json:"created_at"`
+	UpdatedAt    time.Time `gorm:"not null" json:"updated_at"`
+}
+
+// KBChunk is one section chunk of a knowledge base article for retrieval (story NW-15).
+type KBChunk struct {
+	ID           uint      `gorm:"primaryKey" json:"id"`
+	ChunkID      string    `gorm:"column:chunk_id;type:varchar(120);not null;uniqueIndex" json:"chunk_id"`
+	ArticleSlug  string    `gorm:"type:varchar(80);not null;index" json:"article_slug"`
+	ArticleTitle string    `gorm:"type:varchar(160);not null" json:"article_title"`
+	Heading      string    `gorm:"type:varchar(160);not null" json:"heading"`
+	Content      string    `gorm:"type:text;not null" json:"content"`
+	ContentHash  string    `gorm:"type:varchar(64);not null" json:"content_hash"`
+	CreatedAt    time.Time `gorm:"not null" json:"created_at"`
+	UpdatedAt    time.Time `gorm:"not null" json:"updated_at"`
+}
+
 // VaultAccount holds the user's idle cash parked in The Vault (story NW-11), earning risk-free daily APY.
 // user_id is unique so each user has at most one vault account.
 type VaultAccount struct {
