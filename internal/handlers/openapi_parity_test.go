@@ -85,7 +85,9 @@ func fullApp() *app.App {
 		PortfolioHandler: handlers.NewPortfolioHandler(services.NewPortfolioService(&testutil.PortfolioRepo{}, provider, users), auth),
 		OrderHandler:     handlers.NewOrderHandler(services.NewOrderService(&testutil.OrderRepo{}, provider), auth),
 		WatchlistHandler: handlers.NewWatchlistHandler(services.NewWatchlistService(testutil.NewWatchlistRepo(), provider), auth),
-		SimHandler:       handlers.NewSimHandler(&testutil.SimControl{}),
+		AnalyticsHandler: handlers.NewAnalyticsHandler(services.NewAnalyticsService(&testutil.SnapshotRepo{},
+			services.NewPortfolioService(&testutil.PortfolioRepo{}, provider, users), 0.02, nil), auth),
+		SimHandler: handlers.NewSimHandler(&testutil.SimControl{}),
 		AIHandler: handlers.NewAIHandler(
 			services.NewAIBriefService(gateway, provider, testutil.NewAIBriefRepo(), nil), gateway, auth),
 		AuthRepo: auth,

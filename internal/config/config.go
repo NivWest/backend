@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -19,6 +20,7 @@ type Config struct {
 	RateLimit RateLimit
 	Auth      Auth
 	LLM       LLM
+	Analytics Analytics
 }
 
 type Server struct {
@@ -106,6 +108,15 @@ func DefaultModelPrices() map[string]ModelPrice {
 		"claude-opus-4-8": {InputPerMTok: 5, OutputPerMTok: 25, CacheReadPerMTok: 0.50, CacheWritePerMTok: 6.25},
 		"fake":            {},
 	}
+}
+
+// Analytics configures the equity snapshots and risk metrics (story NW-10).
+type Analytics struct {
+	// SnapshotInterval is how often every user with an order is snapshotted (SNAPSHOT_INTERVAL, default 1h;
+	// a non-positive or invalid value falls back to the default).
+	SnapshotInterval time.Duration
+	// RiskFreeRate is the annual risk-free rate of the Sharpe ratio as a fraction (RISK_FREE_RATE, default 0.02).
+	RiskFreeRate float64
 }
 
 type RateLimit struct {
@@ -238,6 +249,10 @@ func Load(envFile string) (*Config, error) {
 			AnthropicBaseURL: strings.TrimSpace(getEnv("ANTHROPIC_BASE_URL", "")),
 			Prices:           DefaultModelPrices(),
 		},
+		Analytics: Analytics{
+			SnapshotInterval: getPositiveDuration("SNAPSHOT_INTERVAL", time.Hour),
+			RiskFreeRate:     getFloat("RISK_FREE_RATE", 0.02),
+		},
 	}, nil
 }
 
@@ -323,6 +338,26 @@ func getDuration(
 		return defaultValue
 	}
 
+	return result
+}
+
+// getPositiveDuration is getDuration that also falls back to defaultValue for zero or negative durations.
+func getPositiveDuration(key string, defaultValue time.Duration) time.Duration {
+	if d := getDuration(key, defaultValue); d > 0 {
+		return d
+	}
+	return defaultValue
+}
+
+func getFloat(key string, defaultValue float64) float64 {
+	value := getEnv(key, "")
+	if value == "" {
+		return defaultValue
+	}
+	result, err := strconv.ParseFloat(value, 64)
+	if err != nil || math.IsNaN(result) || math.IsInf(result, 0) {
+		return defaultValue
+	}
 	return result
 }
 
