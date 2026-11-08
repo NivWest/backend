@@ -37,6 +37,9 @@ func main() {
 		WriteTimeout: cfg.Server.WriteTimeout,
 		IdleTimeout:  cfg.Server.IdleTimeout,
 	}
+	// Streams never go idle on their own: closing the hub ends them (each gets an `error` event), so Shutdown
+	// can drain the remaining connections (story NW-09).
+	server.RegisterOnShutdown(app.QuoteHub.Close)
 
 	// Graceful shutdown (story NW-08): on SIGINT/SIGTERM stop accepting requests, let in-flight ones finish,
 	// then closeApp stops the background workers (the matching engine releases its leader lock) and the pool.

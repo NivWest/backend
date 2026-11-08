@@ -19,16 +19,22 @@ import (
 )
 
 type App struct {
-	HealthHandler    *handlers.HealthHandler
-	OpenAPIHandler   *handlers.OpenAPIHandler
-	UserHandler      *handlers.UserHandler
-	MarketHandler    *handlers.MarketHandler
-	AuthHandler      *handlers.AuthHandler
-	PortfolioHandler *handlers.PortfolioHandler
-	OrderHandler     *handlers.OrderHandler
-	WatchlistHandler *handlers.WatchlistHandler
-	AnalyticsHandler *handlers.AnalyticsHandler
-	AuthRepo         domain.AuthRepository
+	HealthHandler  *handlers.HealthHandler
+	OpenAPIHandler *handlers.OpenAPIHandler
+	UserHandler    *handlers.UserHandler
+	MarketHandler  *handlers.MarketHandler
+	// MarketStreamHandler serves GET /market/stream (story NW-09) from QuoteHub.
+	MarketStreamHandler *handlers.MarketStreamHandler
+	AuthHandler         *handlers.AuthHandler
+	PortfolioHandler    *handlers.PortfolioHandler
+	OrderHandler        *handlers.OrderHandler
+	WatchlistHandler    *handlers.WatchlistHandler
+	AnalyticsHandler    *handlers.AnalyticsHandler
+	AuthRepo            domain.AuthRepository
+
+	// QuoteHub fans live quotes out to the streams. Close it on shutdown (cmd/api registers it with
+	// http.Server.RegisterOnShutdown) so open streams end and the server can drain.
+	QuoteHub *services.QuoteHub
 
 	// SimHandler is nil unless MARKET_DATA_PROVIDER=simulated and MARKET_SIM_CONTROL_ENABLED=true (dev/test only).
 	SimHandler *handlers.SimHandler
@@ -65,6 +71,16 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	warmCtx, cancelWarm := context.WithCancel(context.Background())
 	provider, simHandler := newMarketProvider(warmCtx, cfg, httpClient)
 	marketHandler := handlers.NewMarketHandler(services.NewMarketService(provider))
+
+	// Live quotes (story NW-09): one poller per watched instrument, shared by every stream.
+	quoteHub := services.NewQuoteHub(provider, services.QuoteHubOptions{Interval: cfg.Market.StreamInterval})
+	marketStreamHandler := handlers.NewMarketStreamHandler(quoteHub, handlers.StreamConfig{
+		Heartbeat:    cfg.Market.StreamHeartbeat,
+		WriteTimeout: cfg.Server.WriteTimeout,
+		MaxPerIP:     cfg.Market.StreamMaxPerIP,
+	})
+	log.Printf("market stream: poll every %s, heartbeat %s, at most %d streams per IP",
+		cfg.Market.StreamInterval, cfg.Market.StreamHeartbeat, cfg.Market.StreamMaxPerIP)
 
 	portfolioRepo := repository.NewPortfolioRepository(db)
 	portfolioService := services.NewPortfolioService(portfolioRepo, provider, userRepo)
@@ -113,6 +129,7 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	log.Printf("equity snapshots every %s, risk-free rate %.4f", cfg.Analytics.SnapshotInterval, cfg.Analytics.RiskFreeRate)
 
 	closeApp := func() error {
+		quoteHub.Close()
 		cancelMatch()
 		<-matchDone // the engine releases its lock connection before the pool closes
 		cancelSnapshots()
@@ -130,16 +147,18 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 			domain.Features{GuestAuth: cfg.Auth.GuestEnabled, SimControl: simHandler != nil},
 			cfg.Market.Provider,
 		),
-		OpenAPIHandler:   handlers.NewOpenAPIHandler(api.OpenAPISpec),
-		UserHandler:      userHandler,
-		MarketHandler:    marketHandler,
-		SimHandler:       simHandler,
-		AuthHandler:      authHandler,
-		PortfolioHandler: portfolioHandler,
-		OrderHandler:     orderHandler,
-		WatchlistHandler: watchlistHandler,
-		AnalyticsHandler: analyticsHandler,
-		AuthRepo:         authRepo,
+		OpenAPIHandler:      handlers.NewOpenAPIHandler(api.OpenAPISpec),
+		UserHandler:         userHandler,
+		MarketHandler:       marketHandler,
+		MarketStreamHandler: marketStreamHandler,
+		QuoteHub:            quoteHub,
+		SimHandler:          simHandler,
+		AuthHandler:         authHandler,
+		PortfolioHandler:    portfolioHandler,
+		OrderHandler:        orderHandler,
+		WatchlistHandler:    watchlistHandler,
+		AnalyticsHandler:    analyticsHandler,
+		AuthRepo:            authRepo,
 	}, closeApp, nil
 }
 

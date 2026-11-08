@@ -1004,6 +1004,74 @@ paths:
         "502":
           $ref: "#/components/responses/MarketDataUnavailable"
 
+  # Live quotes (story NW-09). Public, Server-Sent Events. One upstream poll per instrument is shared by every stream.
+  /market/stream:
+    get:
+      summary: Live quotes over Server-Sent Events
+      description: |
+        Streams live quotes for up to 50 instruments as `text/event-stream`. Every request parameter is validated and
+        every id is resolved **before** the stream starts, so a bad request gets a normal JSON error instead.
+
+        Events (each `data` line is one JSON document):
+
+        - `event: quote`: `data` is a `Quote` (same schema as `GET /market/instruments/{orderbook_id}/quote`). On
+          connect the stream sends the current quote of every requested id at once; afterwards it sends a quote only
+          when it changed (last, bid, ask or change_percent). The server polls the provider once per instrument every
+          `MARKET_STREAM_INTERVAL` (backend default 2s, compose 1s), shared by all streams watching it.
+        - `event: error`: `data` is an `Error`. Sent just before the server ends the stream (e.g. on shutdown); the
+          client should reconnect.
+        - `: ping` comment lines every `MARKET_STREAM_HEARTBEAT` (default 10s) keep idle connections open.
+
+        The first message is `retry: 3000` (EventSource reconnect delay in ms). Responses carry
+        `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no` so proxies don't buffer them.
+        Connecting counts as one request against the shared per-IP `/market` rate limit, and an IP can hold at most
+        `MARKET_STREAM_MAX_PER_IP` (default 5) streams at the same time. A slow client never blocks others: per
+        instrument it only keeps the latest undelivered quote.
+      operationId: streamQuotes
+      tags: ["Market data"]
+      security: []
+      parameters:
+        - name: ids
+          in: query
+          required: true
+          description: |
+            Comma-separated orderbook ids, 1 to 50 entries. Entries are trimmed, blank entries are ignored and
+            duplicates are streamed once.
+          schema: { type: string, minLength: 1 }
+          example: SIM-FJRD,SIM-NVE
+      responses:
+        "200":
+          description: The event stream. It stays open until the client disconnects or the server shuts down.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: "Server-Sent Events: `quote` (data: Quote), `error` (data: Error) and `: ping` comments."
+              example: |
+                retry: 3000
+
+                event: quote
+                data: {"orderbook_id":"SIM-FJRD","symbol":"FJRD","last":123.45,"bid":123.33,"ask":123.57,"change_percent":1.25,"currency":"SEK","updated_at":"2026-11-08T09:41:00Z"}
+
+                : ping
+
+        "400":
+          description: "`ids` is missing, has no non-blank entry, or has more than 50 entries."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "ids must list at most 50 orderbook ids", code: VALIDATION_ERROR }
+        "404":
+          $ref: "#/components/responses/InstrumentNotFound"
+        "429":
+          description: Over the per-IP `/market` rate limit, or this IP already holds `MARKET_STREAM_MAX_PER_IP` open streams.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "too many open streams from this address", code: RATE_LIMITED }
+        "502":
+          $ref: "#/components/responses/MarketDataUnavailable"
+
   # Simulated market control (story NW-03). DEV/TEST ONLY: the routes exist only when MARKET_DATA_PROVIDER=simulated
   # and MARKET_SIM_CONTROL_ENABLED=true (otherwise 404); no session needed, no rate limit. Pins are global and in memory.
   /sim/instruments/{orderbook_id}/price:

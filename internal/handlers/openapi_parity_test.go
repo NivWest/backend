@@ -75,10 +75,13 @@ func fullApp() *app.App {
 	auth := testutil.NewAuthRepo()
 	provider := &testutil.MarketProvider{}
 	return &app.App{
-		HealthHandler:    handlers.NewHealthHandler(domain.Features{GuestAuth: true, SimControl: true}, config.MarketProviderSimulated),
-		OpenAPIHandler:   handlers.NewOpenAPIHandler(api.OpenAPISpec),
-		UserHandler:      handlers.NewUserHandler(services.NewUserService(users), auth),
-		MarketHandler:    handlers.NewMarketHandler(services.NewMarketService(provider)),
+		HealthHandler:  handlers.NewHealthHandler(domain.Features{GuestAuth: true, SimControl: true}, config.MarketProviderSimulated),
+		OpenAPIHandler: handlers.NewOpenAPIHandler(api.OpenAPISpec),
+		UserHandler:    handlers.NewUserHandler(services.NewUserService(users), auth),
+		MarketHandler:  handlers.NewMarketHandler(services.NewMarketService(provider)),
+		MarketStreamHandler: handlers.NewMarketStreamHandler(
+			services.NewQuoteHub(provider, services.QuoteHubOptions{}), handlers.StreamConfig{},
+		),
 		AuthHandler:      handlers.NewAuthHandler(services.NewAuthService(users, auth, cfg), cfg),
 		PortfolioHandler: handlers.NewPortfolioHandler(services.NewPortfolioService(&testutil.PortfolioRepo{}, provider, users), auth),
 		OrderHandler:     handlers.NewOrderHandler(services.NewOrderService(&testutil.OrderRepo{}, provider), auth),
@@ -166,10 +169,11 @@ func TestOpenAPIRouteParity(t *testing.T) {
 		}
 	})
 
-	t.Run("the parity check itself sees the core NW-01…06 routes", func(t *testing.T) {
+	t.Run("the parity check itself sees the core NW-01…09 routes", func(t *testing.T) {
 		for _, op := range []string{
 			"POST /auth/guest", "GET /market/instruments", "GET /orders", "POST /orders",
 			"GET /portfolio", "GET /watchlists/{id}", "PUT /sim/instruments/{orderbook_id}/price", "GET /openapi.yaml",
+			"GET /market/stream",
 		} {
 			if !mounted[op] || !documented[op] {
 				t.Errorf("%s: mounted=%t documented=%t, want both", op, mounted[op], documented[op])

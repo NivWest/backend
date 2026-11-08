@@ -74,6 +74,11 @@ const (
 type Market struct {
 	Provider          string
 	SimControlEnabled bool
+
+	// Live quote stream, GET /market/stream (story NW-09).
+	StreamInterval  time.Duration // MARKET_STREAM_INTERVAL: poll interval per instrument (default 2s)
+	StreamHeartbeat time.Duration // MARKET_STREAM_HEARTBEAT: `: ping` interval on idle streams (default 10s)
+	StreamMaxPerIP  int           // MARKET_STREAM_MAX_PER_IP: concurrent streams per client IP (default 5)
 }
 
 // Analytics configures the equity snapshots and risk metrics (story NW-10).
@@ -174,6 +179,9 @@ func Load(envFile string) (*Config, error) {
 				"MARKET_SIM_CONTROL_ENABLED",
 				false,
 			),
+			StreamInterval:  getPositiveDuration("MARKET_STREAM_INTERVAL", 2*time.Second),
+			StreamHeartbeat: getPositiveDuration("MARKET_STREAM_HEARTBEAT", 10*time.Second),
+			StreamMaxPerIP:  getPositiveInt("MARKET_STREAM_MAX_PER_IP", 5),
 		},
 
 		RateLimit: RateLimit{
@@ -281,10 +289,18 @@ func getDuration(
 	return result
 }
 
-// getPositiveDuration is getDuration that also falls back to defaultValue for zero or negative durations.
+// getPositiveDuration is getDuration, but a zero or negative value also falls back to the default.
 func getPositiveDuration(key string, defaultValue time.Duration) time.Duration {
 	if d := getDuration(key, defaultValue); d > 0 {
 		return d
+	}
+	return defaultValue
+}
+
+// getPositiveInt is getInt, but a zero or negative value also falls back to the default.
+func getPositiveInt(key string, defaultValue int) int {
+	if n := getInt(key, defaultValue); n > 0 {
+		return n
 	}
 	return defaultValue
 }
