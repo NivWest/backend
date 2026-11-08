@@ -27,6 +27,8 @@ type OrderService struct {
 	provider domain.MarketDataProvider
 	// sleep simulates execution latency. It is a field so tests can replace it.
 	sleep func(time.Duration)
+	// observer is told about every new fill (story NW-10: the equity snapshot); nil means nobody listens.
+	observer domain.FillObserver
 }
 
 func NewOrderService(repo domain.OrderRepository, provider domain.MarketDataProvider) *OrderService {
@@ -41,6 +43,12 @@ func NewOrderService(repo domain.OrderRepository, provider domain.MarketDataProv
 // no-op in handler tests. It must be called before the service is used.
 func (s *OrderService) SetSleep(sleep func(time.Duration)) {
 	s.sleep = sleep
+}
+
+// SetFillObserver registers o to be told about every new fill, after it is committed (the snapshot service,
+// story NW-10). It must be called before the service is used.
+func (s *OrderService) SetFillObserver(o domain.FillObserver) {
+	s.observer = o
 }
 
 // PlaceOrder validates, prices and executes a market order for userID. idempotencyKey is "" when the
@@ -110,6 +118,9 @@ func (s *OrderService) PlaceOrder(ctx context.Context, userID uint, idempotencyK
 	if !created {
 		// A concurrent retry with the same key won the race: answer like a replay.
 		return replay(order, req)
+	}
+	if s.observer != nil {
+		s.observer.OrderFilled(ctx, userID)
 	}
 	return order, true, nil
 }

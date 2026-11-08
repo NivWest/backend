@@ -40,7 +40,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	url, state, err := h.service.LoginURL(c.Request.Context())
 	if err != nil {
 		log.Printf("[AUTH] login start failed")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start login"})
+		c.JSON(http.StatusInternalServerError, domain.ErrorResponse{Error: "failed to start login", Code: domain.CodeInternal})
 		return
 	}
 	h.setCookie(c, oauthStateCookie, state, 15*60)
@@ -55,14 +55,14 @@ func (h *AuthHandler) Callback(c *gin.Context) {
 	stateCookie, err := c.Cookie(oauthStateCookie)
 	if err != nil || subtle.ConstantTimeCompare([]byte(stateCookie), []byte(queryState)) != 1 {
 		log.Printf("[AUTH] invalid OAuth state")
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid OAuth state"})
+		c.JSON(http.StatusBadRequest, domain.ErrorResponse{Error: "invalid OAuth state", Code: domain.CodeValidation})
 		return
 	}
 	c.SetCookie(oauthStateCookie, "", -1, "/", "", h.cfg.Auth.CookieSecure, true)
 	user, sessionID, err := h.service.Callback(c.Request.Context(), stateCookie, queryCode)
 	if err != nil {
 		log.Printf("[AUTH] Google login failed (has_code=%t)", queryCode != "")
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Google authentication failed"})
+		c.JSON(http.StatusUnauthorized, domain.ErrorResponse{Error: "Google authentication failed", Code: domain.CodeUnauthenticated})
 		return
 	}
 	h.setCookie(c, sessionCookie, sessionID, int(h.cfg.Auth.SessionTTL.Seconds()))

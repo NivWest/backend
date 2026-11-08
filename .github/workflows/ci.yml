@@ -44,3 +44,19 @@ jobs:
 
       - name: Build
         run: go build -o /dev/null ./cmd/api
+
+  api-contract:
+    # Lints api/openapi.yaml with Redocly (rules: redocly.yaml). Runs only in CI because npx needs the
+    # network; route and error-code parity with the code is covered offline by go test (openapi_parity_test.go).
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Lint OpenAPI contract
+        run: make api-lint

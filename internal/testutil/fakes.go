@@ -321,12 +321,17 @@ func (r *OrderRepo) findLocked(userID uint, key string) *domain.Order {
 // PortfolioRepository
 // ---------------------------------------------------------------------------
 
-// PortfolioRepo is a fake domain.PortfolioRepository returning fixed positions.
+// PortfolioRepo is a fake domain.PortfolioRepository returning fixed positions: ByUser[userID] when that
+// user has an entry, Positions otherwise.
 type PortfolioRepo struct {
 	Positions []models.Position
+	ByUser    map[uint][]models.Position
 	Err       error
 }
 
-func (r *PortfolioRepo) GetUserPositions(_ context.Context, _ uint) ([]models.Position, error) {
+func (r *PortfolioRepo) GetUserPositions(_ context.Context, userID uint) ([]models.Position, error) {
+	if p, ok := r.ByUser[userID]; ok {
+		return p, r.Err
+	}
 	return r.Positions, r.Err
 }

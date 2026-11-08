@@ -1,0 +1,11 @@
+# Redocly CLI config for `make api-lint` (CI: .github/workflows/ci.yml, job api-contract).
+extends:
+  - recommended
+
+rules:
+  # No public license has been chosen for this repo; don't invent one in the contract.
+  info-license: off
+  # GET /auth/login and /auth/callback answer with a 302 redirect only; that is their success response.
+  operation-2xx-response: off
+  # /health, /openapi.yaml and /auth/logout have no client error responses.
+  operation-4xx-response: off
