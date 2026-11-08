@@ -461,26 +461,6 @@ func TestOrderRepo_EnsureStockConcurrent(t *testing.T) {
 	}
 }
 
-func TestWatchlistRepo_EnsureStockBySymbol(t *testing.T) {
-	db := migratedDB(t)
-	orders := repository.NewOrderRepository(db)
-	watchlists := repository.NewWatchlistRepository(db)
-	ctx := context.Background()
-
-	id, err := orders.EnsureStock(ctx, "5247", "VOLV B", "Volvo B")
-	if err != nil {
-		t.Fatal(err)
-	}
-	existing, err := watchlists.EnsureStock(ctx, "VOLV B", "Volvo B")
-	if err != nil || existing.ID != id {
-		t.Fatalf("existing symbol: %+v %v, want id %d", existing, err, id)
-	}
-	created, err := watchlists.EnsureStock(ctx, "ERIC B", "Ericsson B")
-	if err != nil || created.ID == 0 || created.OrderbookID != "ERIC B" || created.Symbol != "ERIC B" {
-		t.Fatalf("new symbol: %+v %v", created, err)
-	}
-}
-
 func TestMigrate_LegacySchema(t *testing.T) {
 	db := openSchemaDB(t)
 

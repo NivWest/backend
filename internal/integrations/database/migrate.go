@@ -13,6 +13,9 @@ func Migrate(db *gorm.DB) error {
 	if err := migrateLegacyStocks(db); err != nil {
 		return err
 	}
+	if err := dedupeWatchlistItems(db); err != nil {
+		return err
+	}
 
 	if err := db.AutoMigrate(
 		&models.User{},
@@ -60,6 +63,21 @@ func migrateLegacyStocks(db *gorm.DB) error {
 		if err := db.Exec(stmt).Error; err != nil {
 			return fmt.Errorf("migrate legacy stocks (%s): %w", stmt, err)
 		}
+	}
+	return nil
+}
+
+// dedupeWatchlistItems prepares watchlist_items for the unique index idx_watchlist_items_watchlist_stock
+// (story NW-06), which AutoMigrate cannot create while a list holds the same stock twice: it deletes every
+// duplicate (watchlist_id, stock_id) row but the oldest. Idempotent; fresh databases skip it.
+func dedupeWatchlistItems(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&models.WatchlistItem{}) {
+		return nil
+	}
+	err := db.Exec(`DELETE FROM watchlist_items a USING watchlist_items b
+		WHERE a.watchlist_id = b.watchlist_id AND a.stock_id = b.stock_id AND a.id > b.id`).Error
+	if err != nil {
+		return fmt.Errorf("dedupe watchlist items: %w", err)
 	}
 	return nil
 }

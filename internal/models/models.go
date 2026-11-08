@@ -96,6 +96,8 @@ type Order struct {
 	FilledAt       *time.Time      `json:"filled_at"`
 }
 
+// Watchlist is a named list of stocks owned by one user (at most domain.MaxWatchlists per user). Names are
+// validated to 1–50 characters by the service; the column is wider for older rows.
 type Watchlist struct {
 	ID        uint            `gorm:"primaryKey" json:"id"`
 	UserID    uint            `gorm:"index;not null;constraint:OnDelete:CASCADE;" json:"user_id"`
@@ -105,10 +107,12 @@ type Watchlist struct {
 	UpdatedAt time.Time       `json:"updated_at"`
 }
 
+// WatchlistItem is one stock on one list. (watchlist_id, stock_id) is unique (story NW-06), so an instrument is
+// on a list at most once, also under concurrent adds.
 type WatchlistItem struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
-	WatchlistID uint      `gorm:"index;not null;constraint:OnDelete:CASCADE;" json:"watchlist_id"`
-	StockID     uint      `gorm:"index;not null;constraint:OnDelete:CASCADE;" json:"stock_id"`
+	WatchlistID uint      `gorm:"index;not null;uniqueIndex:idx_watchlist_items_watchlist_stock,priority:1;constraint:OnDelete:CASCADE;" json:"watchlist_id"`
+	StockID     uint      `gorm:"index;not null;uniqueIndex:idx_watchlist_items_watchlist_stock,priority:2;constraint:OnDelete:CASCADE;" json:"stock_id"`
 	Stock       Stock     `json:"stock,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 }
