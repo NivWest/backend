@@ -4,6 +4,8 @@
 
 When tasked with adding a new entity or endpoint, follow this sequence:
 
+0. **Contract (`api/openapi.yaml`):**
+   - Add the paths, schemas, status codes and any new `ErrorCode` values first; `go test ./...` (route parity) fails until code and spec agree.
 1. **Model Definition (`internal/models/models.go`):**
    - Define the struct with proper GORM and JSON tags.
 2. **Migration Registration (`internal/integrations/database/migrate.go`):**
@@ -24,11 +26,12 @@ When tasked with adding a new entity or endpoint, follow this sequence:
    - Return clean JSON payloads with appropriate HTTP status codes.
 7. **Application Wiring:**
    - In `internal/app/app.go`: Instantiate repository, service, handler, and assign to `App` struct.
-   - In `cmd/api/main.go`: Pass `app.NewEntityHandler` into `mountHandlers(...)`.
+   - In `internal/app/router.go`: add the handler to `App.registrars()` (`cmd/api` serves `App.Router`), and to `fullApp()` in `internal/handlers/openapi_parity_test.go`.
 8. **Verification:**
    - Format: `gofmt -w cmd internal`
    - Test: `go test ./...`
    - Compile: `go build ./cmd/api`
+   - Contract lint (needs network): `make api-lint`
 
 ---
 

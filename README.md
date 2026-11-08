@@ -87,7 +87,7 @@ The Avanza provider sends its requests to `AVANZA_BASE_URL`. Market data routes 
 
 ## API
 
-All routes are prefixed with `/api/v1`.
+All routes are prefixed with `/api/v1`. The contract is [`api/openapi.yaml`](api/openapi.yaml) (OpenAPI 3.1), served by the running API at `GET /api/v1/openapi.yaml` and browsable at **`GET /api/docs`** (e.g. http://localhost:8081/api/docs). `go test ./...` fails when routes and the spec drift apart; `make api-lint` lints the spec.
 
 ### Users
 

@@ -119,7 +119,7 @@ type Registrar interface {
 - Define domain-specific errors in `internal/domain/errors.go`.
 - Repositories translate `gorm.ErrRecordNotFound` to domain errors.
 - Handlers map them to HTTP status codes (400, 401, 403, 404, 409, 422, 429, 500).
-- Standard JSON error format (`domain.ErrorResponse`, `api/openapi.yaml#/components/schemas/Error`): `{"error": "description of the error", "code": "MACHINE_CODE"}`. Codes live next to their errors (`internal/domain/auth.go`, `market.go`, `orders.go`).
+- Standard JSON error format (`domain.ErrorResponse`, `api/openapi.yaml#/components/schemas/Error`): `{"error": "description of the error", "code": "MACHINE_CODE"}`, on every error, the OAuth login/callback errors included. Codes live next to their errors (`internal/domain/auth.go`, `market.go`, `orders.go`, `watchlist.go`); a new `Code*` constant must also be added to the spec's `ErrorCode` enum (the parity test fails otherwise).
 - Watchlist errors (`internal/domain/watchlist.go`, story NW-06): `ErrWatchlistNotFound` → 404 `WATCHLIST_NOT_FOUND` (also for another user's list), `ErrWatchlistItemNotFound` → 404 `WATCHLIST_ITEM_NOT_FOUND`, `ErrDuplicateItem` → 409 `CONFLICT`, `ErrWatchlistLimit` → 422 `WATCHLIST_LIMIT_REACHED`.
 - Order errors: `ErrInsufficientFunds` → 422 `INSUFFICIENT_FUNDS`, `ErrInsufficientShares` → 422 `INSUFFICIENT_SHARES`, `ErrIdempotencyKeyReused` → 409 `CONFLICT`; invalid requests (`*ValidationError`) → 400 `VALIDATION_ERROR`, unknown instruments → 404 `INSTRUMENT_NOT_FOUND`.
 
@@ -141,6 +141,15 @@ type Registrar interface {
 - `internal/app` picks the adapter from `MARKET_DATA_PROVIDER` (`avanza` by default, or `simulated`) and builds **one** instance, shared by `services.MarketService` and the handlers. The simulated market caches its daily aggregates per instance and is warmed in a background goroutine at startup. The active provider is logged at startup and reported as `market_data_provider` by `GET /health`.
 - `handlers.MarketHandler` serves the public `/market/instruments…` routes (no session, rate-limited).
 - **Dev/test only:** `handlers.SimHandler` (`PUT`/`DELETE /sim/instruments/{orderbook_id}/price`) is mounted only when `MARKET_DATA_PROVIDER=simulated` **and** `MARKET_SIM_CONTROL_ENABLED=true`; `GET /health` then reports `features.sim_control: true`. It has no auth and no rate limit, and must never be enabled in production. With the Avanza provider the flag is ignored (with a startup warning).
+
+### 3.9. API Contract (story NW-07)
+- `api/openapi.yaml` (OpenAPI 3.1, `info.title: TradeEdu API`) is the enforced source of truth. The `backend/api` package embeds it with `go:embed` (`api.OpenAPISpec`); `handlers.OpenAPIHandler` serves it at `GET /api/v1/openapi.yaml` (`application/yaml`) and renders it at `GET /api/docs` with a pinned Scalar build (`scalarVersion` + SRI hash in `openapi_handler.go`, strict CSP). Both are public.
+- The router lives in `internal/app/router.go` (`App.Router`): `/api/v1` gets every non-nil handler, `/api` gets the docs page. `cmd/api` serves exactly this engine.
+- Enforced by `go test ./...`:
+  - `internal/handlers/openapi_parity_test.go` builds `App.Router` from `internal/testutil` fakes with guest login and sim control on, and fails when a mounted route is not in the spec, a documented operation has no route, or a route outside `/api/v1` is not allow-listed (`/api/docs` only). It also requires every documented error response (status ≥ 400 with a body) to use `#/components/schemas/Error`, and the `ErrorCode` enum to equal the `Code*` string constants in `internal/domain` (scanned with `go/parser`).
+  - `api/spec_test.go`: the spec parses as OpenAPI 3.1 and `info.version` equals `VERSION` (bump both on a release).
+- `make api-lint` runs Redocly (`redocly.yaml`, recommended rules) on the spec. It needs network for `npx`, so it runs in CI (job `api-contract`), not in the offline fast checks.
+- Changing the API: edit `api/openapi.yaml` first (new path, schemas, error codes in `ErrorCode`), then the code; public operations say `security: []`. The frontend vendors the file and regenerates its types (`npm run api:sync && npm run api:gen`).
 
 ---
 
