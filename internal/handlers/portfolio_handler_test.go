@@ -32,7 +32,7 @@ func sortedKeys(obj map[string]any) []string {
 }
 
 func TestPortfolioHandler_GetPortfolio(t *testing.T) {
-	portfolioKeys := []string{"cash", "holdings_value", "positions", "realized_pnl", "top_movers", "total_equity", "unrealized_pnl"}
+	portfolioKeys := []string{"cash", "holdings_value", "positions", "realized_pnl", "top_movers", "total_equity", "unrealized_pnl", "vault_value"}
 	positionKeys := []string{"avg_cost", "day_change_percent", "last_price", "market_value", "name", "orderbook_id",
 		"quantity", "symbol", "unrealized_pnl", "unrealized_pnl_percent", "weight"}
 
@@ -67,7 +67,7 @@ func TestPortfolioHandler_GetPortfolio(t *testing.T) {
 			t.Errorf("portfolio keys = %v, want %v", got, portfolioKeys)
 		}
 		want := map[string]any{"cash": float64(100000), "holdings_value": float64(0), "total_equity": float64(100000),
-			"unrealized_pnl": float64(0), "realized_pnl": float64(0)}
+			"unrealized_pnl": float64(0), "realized_pnl": float64(0), "vault_value": float64(0)}
 		for k, v := range want {
 			if body[k] != v {
 				t.Errorf("portfolio[%q] = %v, want %v", k, body[k], v)
