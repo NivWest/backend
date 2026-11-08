@@ -19,8 +19,21 @@ type Config struct {
 	Market    Market
 	RateLimit RateLimit
 	Auth      Auth
+	Matching  Matching
 	Analytics Analytics
 }
+
+// Matching configures the background matching engine for LIMIT and STOP orders (story NW-08).
+type Matching struct {
+	// Interval is how often the engine evaluates open orders (MATCHING_INTERVAL, default 1s, at least 100ms).
+	Interval time.Duration
+}
+
+// MinMatchingInterval is the shortest accepted MATCHING_INTERVAL; shorter or invalid values fall back to the default.
+const MinMatchingInterval = 100 * time.Millisecond
+
+// DefaultMatchingInterval is MATCHING_INTERVAL when it is unset or invalid.
+const DefaultMatchingInterval = time.Second
 
 type Server struct {
 	Host         string
@@ -196,11 +209,23 @@ func Load(envFile string) (*Config, error) {
 			GuestRateLimitPerMinute: getInt("AUTH_GUEST_RATE_LIMIT_PER_MINUTE", 10),
 		},
 
+		Matching: Matching{
+			Interval: matchingInterval(getDuration("MATCHING_INTERVAL", DefaultMatchingInterval)),
+		},
+
 		Analytics: Analytics{
 			SnapshotInterval: getPositiveDuration("SNAPSHOT_INTERVAL", time.Hour),
 			RiskFreeRate:     getFloat("RISK_FREE_RATE", 0.02),
 		},
 	}, nil
+}
+
+// matchingInterval rejects intervals below MinMatchingInterval (a busy loop) in favour of the default.
+func matchingInterval(d time.Duration) time.Duration {
+	if d < MinMatchingInterval {
+		return DefaultMatchingInterval
+	}
+	return d
 }
 
 func getEnv(key, defaultValue string) string {
