@@ -85,6 +85,7 @@ func (r *orderRepo) PlacePending(ctx context.Context, p domain.PendingOrderParam
 			LimitPrice:   toNullDecimal(p.LimitPrice),
 			StopPrice:    toNullDecimal(p.StopPrice),
 			ReservedCash: reservedCash,
+			Note:         p.Note,
 			CreatedAt:    now,
 			UpdatedAt:    now,
 		}

@@ -16,6 +16,8 @@ import (
 	"io/fs"
 	"strings"
 	"text/template"
+
+	"backend/internal/domain"
 )
 
 //go:embed *.tmpl
@@ -24,10 +26,15 @@ var files embed.FS
 // Prompt versions, "<feature>.v<N>"; each one names the file <version>.tmpl.
 const (
 	InstrumentBriefVersion = "instrument_brief.v1"
+	InsightsReviewVersion  = "insights_review.v1"
+	KnowledgeAskVersion    = "knowledge_ask.v1"
 )
 
 // InstrumentDataTag delimits the instrument data in the instrument brief prompt.
 const InstrumentDataTag = "instrument_data"
+
+// InsightsDataTag delimits the detector and order data in the insights review prompt.
+const InsightsDataTag = "insights_data"
 
 // templates maps each version to its own template set, so every file can define "system" and "user".
 var templates = func() map[string]*template.Template {
@@ -74,6 +81,38 @@ func InstrumentBrief(d InstrumentData) (Prompt, error) {
 		return Prompt{}, fmt.Errorf("encode instrument data: %w", err)
 	}
 	return render(InstrumentBriefVersion, map[string]string{"InstrumentJSON": string(raw)})
+}
+
+// InsightsOrderData is the compact order summary passed into the insights review prompt.
+type InsightsOrderData struct {
+	ID          uint    `json:"id"`
+	Side        string  `json:"side"`
+	Symbol      string  `json:"symbol"`
+	Quantity    string  `json:"quantity"`
+	FillPrice   string  `json:"fill_price"`
+	RealizedPnL *string `json:"realized_pnl,omitempty"`
+	Note        string  `json:"note"`
+	CreatedAt   string  `json:"created_at"`
+}
+
+// InsightsReviewData is the detector and order history payload rendered inside <insights_data>.
+type InsightsReviewData struct {
+	Detectors []domain.DetectorResult `json:"detectors"`
+	Orders    []InsightsOrderData     `json:"orders"`
+}
+
+// InsightsReview renders insights_review.v1 for d.
+func InsightsReview(d InsightsReviewData) (Prompt, error) {
+	raw, err := json.MarshalIndent(d, "", "  ") // HTML-escapes <, > and &
+	if err != nil {
+		return Prompt{}, fmt.Errorf("encode insights data: %w", err)
+	}
+	return render(InsightsReviewVersion, map[string]string{"InsightsJSON": string(raw)})
+}
+
+// KnowledgeAsk renders knowledge_ask.v1 for the user's question.
+func KnowledgeAsk(question string) (Prompt, error) {
+	return render(KnowledgeAskVersion, map[string]string{"Question": question})
 }
 
 func render(version string, data any) (Prompt, error) {

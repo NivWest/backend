@@ -28,7 +28,7 @@ func kallMarket() *testutil.MarketProvider {
 
 const buyLimit = `{"orderbook_id":"SIM-KALL","side":"BUY","type":"LIMIT","quantity":10,"limit_price":95}`
 
-var orderKeys = []string{"commission", "created_at", "fill_price", "filled_at", "id", "limit_price", "name", "orderbook_id",
+var orderKeys = []string{"commission", "created_at", "fill_price", "filled_at", "id", "limit_price", "name", "note", "orderbook_id",
 	"quantity", "reject_reason", "side", "status", "stop_price", "symbol", "total", "type"}
 
 func decodeMap(t *testing.T, raw []byte) map[string]any {

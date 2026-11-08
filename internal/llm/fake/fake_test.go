@@ -105,3 +105,41 @@ func TestStreamEmitsContent(t *testing.T) {
 		t.Fatalf("callback error = %v, want it returned", err)
 	}
 }
+
+func TestInsightsReviewScript(t *testing.T) {
+	p, err := prompts.InsightsReview(prompts.InsightsReviewData{
+		Detectors: []domain.DetectorResult{
+			{ID: domain.DetectorConcentration, Title: "Position concentration", Triggered: true, Evidence: domain.DetectorEvidence{OrderIDs: []uint{42}}},
+			{ID: domain.DetectorRevengeTrading, Title: "Revenge trading", Triggered: false, Evidence: domain.DetectorEvidence{OrderIDs: []uint{}}},
+		},
+		Orders: []prompts.InsightsOrderData{{ID: 42, Side: "BUY", Symbol: "SOLV", Quantity: "500"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := domain.LLMRequest{
+		Feature: domain.AIFeatureInsightsReview, PromptVersion: p.Version, System: p.System,
+		Messages: []domain.LLMMessage{{Role: domain.LLMRoleUser, Text: p.User}},
+	}
+	resp, err := New().Generate(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var draft ReviewDraft
+	if err := json.Unmarshal([]byte(resp.Content), &draft); err != nil {
+		t.Fatalf("decode ReviewDraft: %v", err)
+	}
+	if draft.Headline != "FAKE: weekly review" {
+		t.Fatalf("Headline = %q, want %q", draft.Headline, "FAKE: weekly review")
+	}
+	if len(draft.Observations) != 1 {
+		t.Fatalf("len(Observations) = %d, want 1", len(draft.Observations))
+	}
+	obs := draft.Observations[0]
+	if obs.DetectorID != "concentration" || obs.Narrative != "FAKE: Position concentration" {
+		t.Fatalf("obs = %+v", obs)
+	}
+	if len(obs.OrderIDs) != 2 || obs.OrderIDs[0] != 42 || obs.OrderIDs[1] != 999999999 {
+		t.Fatalf("obs.OrderIDs = %v, want [42, 999999999]", obs.OrderIDs)
+	}
+}

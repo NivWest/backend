@@ -15,6 +15,7 @@ import (
 	"backend/internal/integrations/avanza"
 	"backend/internal/integrations/database"
 	"backend/internal/integrations/simmarket"
+	"backend/internal/knowledge"
 	"backend/internal/llm/fake"
 	"backend/internal/observability"
 	"backend/internal/repository"
@@ -34,6 +35,8 @@ type App struct {
 	WatchlistHandler    *handlers.WatchlistHandler
 	AIHandler           *handlers.AIHandler
 	AnalyticsHandler    *handlers.AnalyticsHandler
+	InsightsHandler     *handlers.InsightsHandler
+	LearnHandler        *handlers.LearnHandler
 	VaultHandler        *handlers.VaultHandler
 	LeaderboardHandler  *handlers.LeaderboardHandler
 	AuthRepo            domain.AuthRepository
@@ -131,12 +134,24 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	watchlistService := services.NewWatchlistService(watchlistRepo, provider)
 	watchlistHandler := handlers.NewWatchlistHandler(watchlistService, authRepo)
 
+	// Knowledge base (story NW-15): seed embedded articles into Postgres, expose search and article endpoints.
+	if err := knowledge.Seed(context.Background(), db); err != nil {
+		cancelMatch()
+		<-matchDone
+		cancelWarm()
+		return nil, nil, fmt.Errorf("seed knowledge base: %w", err)
+	}
+	knowledgeRepo := repository.NewKnowledgeRepository(db)
+	knowledgeService := services.NewKnowledgeService(knowledgeRepo)
+	learnHandler := handlers.NewLearnHandler(knowledgeService)
+
 	// The LLM gateway (story NW-14): one provider, selected by LLM_PROVIDER, behind budget + usage ledger.
 	llm := newLLM(cfg)
 	gateway := services.NewAIGateway(llm, repository.NewAIUsageRepository(db), cfg.LLM.DailyTokenBudget, cfg.LLM.Timeout, cfg.LLM.Prices, time.Now)
 	gateway.SetMetricsObserver(metrics)
 	briefService := services.NewAIBriefService(gateway, provider, repository.NewAIBriefRepository(db), time.Now)
-	aiHandler := handlers.NewAIHandler(briefService, gateway, authRepo)
+	askService := services.NewAskService(gateway, knowledgeRepo)
+	aiHandler := handlers.NewAIHandler(briefService, gateway, askService, authRepo)
 
 	vaultRepo := repository.NewVaultRepository(db)
 	vaultService := services.NewVaultService(vaultRepo, userRepo, cfg.Vault.APY, time.Now)
@@ -148,6 +163,10 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	leaderboardRepo := repository.NewLeaderboardRepository(db)
 	leaderboardService := services.NewLeaderboardService(leaderboardRepo, userRepo, analyticsService)
 	leaderboardHandler := handlers.NewLeaderboardHandler(leaderboardService, authRepo)
+
+	insightsReviewRepo := repository.NewInsightsReviewRepository(db)
+	insightsService := services.NewInsightsService(portfolioService, orderRepo, insightsReviewRepo, gateway, nil, time.Now)
+	insightsHandler := handlers.NewInsightsHandler(insightsService, authRepo)
 
 	// The guest purger runs until closeApp cancels its context: once now, then every GuestPurgeInterval.
 	guestRepo := repository.NewGuestRepository(db)
@@ -196,6 +215,8 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 		WatchlistHandler:    watchlistHandler,
 		AIHandler:           aiHandler,
 		AnalyticsHandler:    analyticsHandler,
+		InsightsHandler:     insightsHandler,
+		LearnHandler:        learnHandler,
 		VaultHandler:        vaultHandler,
 		LeaderboardHandler:  leaderboardHandler,
 		AuthRepo:            authRepo,

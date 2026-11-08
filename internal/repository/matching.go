@@ -60,7 +60,7 @@ func (r *matchingRepo) FillOrder(ctx context.Context, p domain.FillOrderParams) 
 			return err
 		}
 		o := locked.order
-		if err := settleFill(tx, locked.user, locked.position, domain.ExecuteOrderParams{
+		realizedPnLPtr, err := settleFill(tx, locked.user, locked.position, domain.ExecuteOrderParams{
 			UserID:     o.UserID,
 			StockID:    o.StockID,
 			Side:       domain.OrderSide(o.Side),
@@ -69,16 +69,18 @@ func (r *matchingRepo) FillOrder(ctx context.Context, p domain.FillOrderParams) 
 			FillPrice:  p.FillPrice,
 			Commission: p.Commission,
 			Total:      p.Total,
-		}); err != nil {
+		})
+		if err != nil {
 			return err
 		}
 		filledAt := p.FilledAt.UTC()
 		if err := tx.Model(o).Updates(map[string]any{
-			"status":     string(domain.OrderStatusFilled),
-			"fill_price": p.FillPrice,
-			"commission": p.Commission,
-			"total":      p.Total,
-			"filled_at":  filledAt,
+			"status":       string(domain.OrderStatusFilled),
+			"fill_price":   p.FillPrice,
+			"commission":   p.Commission,
+			"total":        p.Total,
+			"realized_pnl": realizedPnLPtr,
+			"filled_at":    filledAt,
 		}).Error; err != nil {
 			return fmt.Errorf("fill order %d: %w", p.OrderID, err)
 		}

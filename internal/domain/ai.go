@@ -15,10 +15,11 @@ type AIFeature string
 
 const (
 	AIFeatureInstrumentBrief AIFeature = "instrument_brief"
+	AIFeatureKnowledgeAsk    AIFeature = "knowledge_ask"
 )
 
 // AIFeatures lists every feature, sorted by name; GET /ai/usage reports each one.
-var AIFeatures = []AIFeature{AIFeatureInstrumentBrief}
+var AIFeatures = []AIFeature{AIFeatureInsightsReview, AIFeatureInstrumentBrief, AIFeatureKnowledgeAsk}
 
 // AIDisclaimer labels every piece of AI output (docs/conventions.md).
 const AIDisclaimer = "AI-generated · educational, not financial advice"

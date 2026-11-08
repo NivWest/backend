@@ -64,6 +64,7 @@ func deleteGuestBatch(tx *gorm.DB, ids []uint) (int64, error) {
 		{&models.Transaction{}, "user_id IN ?"},
 		{&models.Session{}, "user_id IN ?"},
 		{&models.AIUsage{}, "user_id IN ?"},
+		{&models.AIInsightReview{}, "user_id IN ?"},
 	}
 	for _, c := range children {
 		if err := tx.Unscoped().Where(c.where, ids).Delete(c.model).Error; err != nil {

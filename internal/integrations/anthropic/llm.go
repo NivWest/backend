@@ -160,8 +160,28 @@ func (l *LLM) params(req domain.LLMRequest) (sdk.BetaMessageNewParams, error) {
 		}
 		p.Tools = append(p.Tools, sdk.BetaToolUnionParam{OfTool: &tool})
 	}
+	isFirstUser := true
 	for _, m := range req.Messages {
 		var blocks []sdk.BetaContentBlockParamUnion
+		if m.Role == domain.LLMRoleUser && isFirstUser {
+			isFirstUser = false
+			for _, doc := range req.Documents {
+				var cit sdk.BetaCitationsConfigParam
+				if doc.Citations {
+					cit = sdk.BetaCitationsConfigParam{Enabled: param.NewOpt(true)}
+				}
+				docBlock := sdk.BetaRequestDocumentBlockParam{
+					Source: sdk.BetaRequestDocumentBlockSourceUnionParam{
+						OfText: &sdk.BetaPlainTextSourceParam{
+							Data: doc.Content,
+						},
+					},
+					Title:     param.NewOpt(doc.Title),
+					Citations: cit,
+				}
+				blocks = append(blocks, sdk.BetaContentBlockParamUnion{OfDocument: &docBlock})
+			}
+		}
 		if m.Text != "" {
 			blocks = append(blocks, sdk.NewBetaTextBlock(m.Text))
 		}
@@ -195,10 +215,20 @@ func toResponseLatency(msg *sdk.BetaMessage, latency time.Duration) domain.LLMRe
 func toResponse(msg *sdk.BetaMessage) domain.LLMResponse {
 	var text strings.Builder
 	var calls []domain.LLMToolCall
+	var citations []domain.LLMCitation
 	for _, b := range msg.Content {
 		switch b.Type {
 		case "text":
 			text.WriteString(b.Text)
+			for _, c := range b.Citations {
+				citations = append(citations, domain.LLMCitation{
+					DocumentIndex:  int(c.DocumentIndex),
+					DocumentTitle:  c.DocumentTitle,
+					CitedText:      c.CitedText,
+					StartCharIndex: int(c.StartCharIndex),
+					EndCharIndex:   int(c.EndCharIndex),
+				})
+			}
 		case "tool_use":
 			calls = append(calls, domain.LLMToolCall{ID: b.ID, Name: b.Name, Input: b.Input})
 		}
@@ -206,6 +236,7 @@ func toResponse(msg *sdk.BetaMessage) domain.LLMResponse {
 	resp := domain.LLMResponse{
 		Content:   text.String(),
 		ToolCalls: calls,
+		Citations: citations,
 		Model:     string(msg.Model),
 		Usage: domain.LLMUsage{
 			Input:      msg.Usage.InputTokens,

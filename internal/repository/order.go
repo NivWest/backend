@@ -125,7 +125,8 @@ func (r *orderRepo) Execute(ctx context.Context, p domain.ExecuteOrderParams) (*
 
 		// (d) Check buying power or available shares (reservations of OPEN orders are held back, story
 		// NW-08), then move cash and shares and update the balance (and realized_pnl) in one UPDATE.
-		if err := settleFill(tx, user, position, p); err != nil {
+		realizedPnLPtr, err := settleFill(tx, user, position, p)
+		if err != nil {
 			return err
 		}
 
@@ -137,18 +138,20 @@ func (r *orderRepo) Execute(ctx context.Context, p domain.ExecuteOrderParams) (*
 			orderType = domain.OrderTypeMarket
 		}
 		order := models.Order{
-			UserID:     p.UserID,
-			StockID:    p.StockID,
-			Side:       string(p.Side),
-			Type:       string(orderType),
-			Status:     string(domain.OrderStatusFilled),
-			Quantity:   p.Quantity,
-			FillPrice:  p.FillPrice,
-			Commission: p.Commission,
-			Total:      p.Total,
-			CreatedAt:  now,
-			UpdatedAt:  now,
-			FilledAt:   &now,
+			UserID:      p.UserID,
+			StockID:     p.StockID,
+			Side:        string(p.Side),
+			Type:        string(orderType),
+			Status:      string(domain.OrderStatusFilled),
+			Quantity:    p.Quantity,
+			FillPrice:   p.FillPrice,
+			Commission:  p.Commission,
+			Total:       p.Total,
+			Note:        p.Note,
+			RealizedPnL: realizedPnLPtr,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+			FilledAt:    &now,
 		}
 		if p.IdempotencyKey != "" {
 			key := p.IdempotencyKey
@@ -213,37 +216,39 @@ func lockPosition(tx *gorm.DB, userID, stockID uint) (*models.Position, error) {
 // quantity − reserved_quantity >= Quantity (ErrInsufficientShares). A pending order's own reservation must be
 // released before. Only a SELL realizes P&L, against the position's cost basis before the sale (avg_cost is
 // unchanged by selling). Only balance (and, for a SELL, realized_pnl) change on the user row, in one UPDATE.
-func settleFill(tx *gorm.DB, user *models.User, position *models.Position, p domain.ExecuteOrderParams) error {
+func settleFill(tx *gorm.DB, user *models.User, position *models.Position, p domain.ExecuteOrderParams) (*decimal.Decimal, error) {
 	balance := user.Balance
 	userUpdates := map[string]any{}
+	var realizedPnLPtr *decimal.Decimal
 	switch p.Side {
 	case domain.OrderSideBuy:
 		if balance.Sub(user.ReservedCash).LessThan(p.Total) {
-			return domain.ErrInsufficientFunds
+			return nil, domain.ErrInsufficientFunds
 		}
 		balance = balance.Sub(p.Total)
 		if err := applyBuy(tx, position, p); err != nil {
-			return err
+			return nil, err
 		}
 	case domain.OrderSideSell:
 		if position == nil || position.Quantity.Sub(position.ReservedQuantity).LessThan(p.Quantity) {
-			return domain.ErrInsufficientShares
+			return nil, domain.ErrInsufficientShares
 		}
 		balance = balance.Add(p.Total)
 		realized := domain.RealizedPnL(p.Total, position.AvgCost, p.Quantity)
+		realizedPnLPtr = &realized
 		userUpdates["realized_pnl"] = user.RealizedPnL.Add(realized)
 		if err := applySell(tx, position, p.Quantity); err != nil {
-			return err
+			return nil, err
 		}
 	default:
-		return fmt.Errorf("unsupported order side %q", p.Side)
+		return nil, fmt.Errorf("unsupported order side %q", p.Side)
 	}
 
 	userUpdates["balance"] = balance
 	if err := tx.Model(user).Updates(userUpdates).Error; err != nil {
-		return fmt.Errorf("update balance: %w", err)
+		return nil, fmt.Errorf("update balance: %w", err)
 	}
-	return nil
+	return realizedPnLPtr, nil
 }
 
 // applyBuy adds the bought shares to the (locked) position, creating it when missing. The new
@@ -322,10 +327,48 @@ func toDomainOrder(o *models.Order, s *models.Stock) *domain.Order {
 		FillPrice:    o.FillPrice,
 		Commission:   o.Commission,
 		Total:        o.Total,
+		Note:         o.Note,
+		RealizedPnL:  o.RealizedPnL,
 		RejectReason: o.RejectReason,
 		CreatedAt:    o.CreatedAt.UTC(),
 		FilledAt:     filledAt,
 	}
+}
+
+// ListAllByUser returns all orders of the user, ordered by created_at asc, id asc.
+func (r *orderRepo) ListAllByUser(ctx context.Context, userID uint) ([]domain.Order, error) {
+	var rows []models.Order
+	if err := r.db.WithContext(ctx).
+		Preload("Stock", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
+		Where("user_id = ?", userID).
+		Order("created_at asc, id asc").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]domain.Order, len(rows))
+	for i := range rows {
+		out[i] = *toDomainOrder(&rows[i], &rows[i].Stock)
+	}
+	return out, nil
+}
+
+// UpdateNote updates the note on an order owned by userID (story NW-17).
+func (r *orderRepo) UpdateNote(ctx context.Context, userID, orderID uint, note string) (*domain.Order, error) {
+	var order models.Order
+	if err := r.db.WithContext(ctx).
+		Preload("Stock", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
+		Where("id = ? AND user_id = ?", orderID, userID).
+		First(&order).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrOrderNotFound
+		}
+		return nil, err
+	}
+	if err := r.db.WithContext(ctx).Model(&order).Update("note", note).Error; err != nil {
+		return nil, err
+	}
+	order.Note = note
+	return toDomainOrder(&order, &order.Stock), nil
 }
 
 // nullDecimal maps a nullable numeric column to a pointer (nil for NULL).
