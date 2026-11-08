@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ type Config struct {
 	Market    Market
 	RateLimit RateLimit
 	Auth      Auth
+	Analytics Analytics
 }
 
 type Server struct {
@@ -59,6 +61,15 @@ const (
 type Market struct {
 	Provider          string
 	SimControlEnabled bool
+}
+
+// Analytics configures the equity snapshots and risk metrics (story NW-10).
+type Analytics struct {
+	// SnapshotInterval is how often every user with an order is snapshotted (SNAPSHOT_INTERVAL, default 1h;
+	// a non-positive or invalid value falls back to the default).
+	SnapshotInterval time.Duration
+	// RiskFreeRate is the annual risk-free rate of the Sharpe ratio as a fraction (RISK_FREE_RATE, default 0.02).
+	RiskFreeRate float64
 }
 
 type RateLimit struct {
@@ -176,6 +187,11 @@ func Load(envFile string) (*Config, error) {
 			GuestSessionTTL:         getDuration("AUTH_GUEST_SESSION_TTL", 24*time.Hour),
 			GuestRateLimitPerMinute: getInt("AUTH_GUEST_RATE_LIMIT_PER_MINUTE", 10),
 		},
+
+		Analytics: Analytics{
+			SnapshotInterval: getPositiveDuration("SNAPSHOT_INTERVAL", time.Hour),
+			RiskFreeRate:     getFloat("RISK_FREE_RATE", 0.02),
+		},
 	}, nil
 }
 
@@ -237,6 +253,26 @@ func getDuration(
 		return defaultValue
 	}
 
+	return result
+}
+
+// getPositiveDuration is getDuration that also falls back to defaultValue for zero or negative durations.
+func getPositiveDuration(key string, defaultValue time.Duration) time.Duration {
+	if d := getDuration(key, defaultValue); d > 0 {
+		return d
+	}
+	return defaultValue
+}
+
+func getFloat(key string, defaultValue float64) float64 {
+	value := getEnv(key, "")
+	if value == "" {
+		return defaultValue
+	}
+	result, err := strconv.ParseFloat(value, 64)
+	if err != nil || math.IsNaN(result) || math.IsInf(result, 0) {
+		return defaultValue
+	}
 	return result
 }
 
