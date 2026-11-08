@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/shopspring/decimal"
 
@@ -11,9 +12,12 @@ import (
 )
 
 type PortfolioService struct {
-	repo     domain.PortfolioRepository
-	provider domain.MarketDataProvider
-	userRepo domain.UserRepository
+	repo      domain.PortfolioRepository
+	provider  domain.MarketDataProvider
+	userRepo  domain.UserRepository
+	vaultRepo domain.VaultRepository
+	vaultAPY  float64
+	now       func() time.Time
 }
 
 func NewPortfolioService(
@@ -26,6 +30,19 @@ func NewPortfolioService(
 		provider: provider,
 		userRepo: userRepo,
 	}
+}
+
+// SetVault attaches vault repository and APY for including vault balance in the portfolio.
+func (s *PortfolioService) SetVault(vaultRepo domain.VaultRepository, apy float64, now func() time.Time) {
+	s.vaultRepo = vaultRepo
+	if apy <= 0 {
+		apy = domain.DefaultVaultAPY
+	}
+	s.vaultAPY = apy
+	if now == nil {
+		now = time.Now
+	}
+	s.now = now
 }
 
 var hundred = decimal.NewFromInt(100)
@@ -104,12 +121,24 @@ func (s *PortfolioService) GetPortfolio(ctx context.Context, userID uint) (*doma
 		return valued[i].orderbookID < valued[j].orderbookID
 	})
 
+	vaultValue := decimal.Zero
+	if s.vaultRepo != nil {
+		now := time.Now
+		if s.now != nil {
+			now = s.now
+		}
+		if v, err := s.vaultRepo.GetVaultBalance(ctx, userID, s.vaultAPY, now().UTC()); err == nil {
+			vaultValue = v
+		}
+	}
+
 	portfolio := &domain.Portfolio{
 		Cash:          domain.MoneyFloat(user.Balance),
 		ReservedCash:  domain.MoneyFloat(user.ReservedCash),
 		BuyingPower:   domain.MoneyFloat(user.Balance.Sub(user.ReservedCash)),
 		HoldingsValue: domain.MoneyFloat(holdingsValue),
-		TotalEquity:   domain.MoneyFloat(user.Balance.Add(holdingsValue)),
+		VaultValue:    domain.MoneyFloat(vaultValue),
+		TotalEquity:   domain.MoneyFloat(user.Balance.Add(holdingsValue).Add(vaultValue)),
 		UnrealizedPnL: domain.MoneyFloat(unrealizedTotal),
 		RealizedPnL:   domain.MoneyFloat(user.RealizedPnL),
 		Positions:     make([]domain.PortfolioPosition, 0, len(valued)),

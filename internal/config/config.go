@@ -21,6 +21,7 @@ type Config struct {
 	Auth      Auth
 	Matching  Matching
 	Analytics Analytics
+	Vault     Vault
 }
 
 // Matching configures the background matching engine for LIMIT and STOP orders (story NW-08).
@@ -86,8 +87,14 @@ type Analytics struct {
 	// SnapshotInterval is how often every user with an order is snapshotted (SNAPSHOT_INTERVAL, default 1h;
 	// a non-positive or invalid value falls back to the default).
 	SnapshotInterval time.Duration
-	// RiskFreeRate is the annual risk-free rate of the Sharpe ratio as a fraction (RISK_FREE_RATE, default 0.02).
+	// RiskFreeRate is the annual risk-free rate of the Sharpe ratio as a fraction (RISK_FREE_RATE, default VAULT_APY).
 	RiskFreeRate float64
+}
+
+// Vault configures the risk-free yield vault (story NW-11).
+type Vault struct {
+	// APY is the annual percentage yield for the vault as a fraction (VAULT_APY, default 0.051).
+	APY float64
 }
 
 type RateLimit struct {
@@ -215,7 +222,11 @@ func Load(envFile string) (*Config, error) {
 
 		Analytics: Analytics{
 			SnapshotInterval: getPositiveDuration("SNAPSHOT_INTERVAL", time.Hour),
-			RiskFreeRate:     getFloat("RISK_FREE_RATE", 0.02),
+			RiskFreeRate:     getFloat("RISK_FREE_RATE", getFloat("VAULT_APY", 0.051)),
+		},
+
+		Vault: Vault{
+			APY: getFloat("VAULT_APY", 0.051),
 		},
 	}, nil
 }
