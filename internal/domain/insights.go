@@ -116,6 +116,12 @@ type InsightsReview struct {
 	Disclaimer   string              `json:"disclaimer"`
 }
 
+// InsightsReviewListResponse is the body of GET /ai/insights/reviews (#/components/schemas/InsightsReviewListResponse).
+type InsightsReviewListResponse struct {
+	Items      []InsightsReview `json:"items"`
+	NextCursor *string          `json:"next_cursor"`
+}
+
 // InsightsReviewRepository persists generated weekly reviews.
 type InsightsReviewRepository interface {
 	Create(ctx context.Context, review *InsightsReview, userID uint, model, promptVersion string) error

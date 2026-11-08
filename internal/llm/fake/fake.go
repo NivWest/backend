@@ -22,6 +22,7 @@ type script func(req domain.LLMRequest) (string, error)
 
 var scripts = map[domain.AIFeature]script{
 	domain.AIFeatureInstrumentBrief: instrumentBrief,
+	domain.AIFeatureInsightsReview:  insightsReview,
 }
 
 // LLM is the fake domain.LLM.
