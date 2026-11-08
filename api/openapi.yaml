@@ -33,6 +33,8 @@ tags:
     description: Up to 10 named watchlists per user with live prices (story NW-06).
   - name: Portfolio
     description: Cash, positions at live prices, unrealized and realized P&L (story NW-05), equity history and risk analytics (story NW-10).
+  - name: Leaderboard
+    description: Risk-adjusted and total return trader rankings (story NW-13).
 
 components:
   securitySchemes:
@@ -82,7 +84,7 @@ components:
     Profile:
       type: object
       description: The signed-in user. Never exposes google_id.
-      required: [id, name, email, role, balance, is_guest]
+      required: [id, name, email, role, balance, is_guest, leaderboard_opt_in]
       properties:
         id:
           type: integer
@@ -101,6 +103,13 @@ components:
         is_guest:
           type: boolean
           description: True when role is guest.
+        display_name:
+          type: [string, "null"]
+          description: Pseudonymous handle for the leaderboard.
+          examples: [bull_42]
+        leaderboard_opt_in:
+          type: boolean
+          description: True when opted in to the public leaderboard.
 
     Features:
       type: object
@@ -605,6 +614,61 @@ components:
           items: { $ref: "#/components/schemas/AllocationSlice" }
           description: Positions by value desc (then orderbook id asc), then the cash slice, which is always present.
 
+    UpdateProfileRequest:
+      type: object
+      description: Fields to update on the user profile (story NW-13).
+      properties:
+        display_name:
+          type: string
+          minLength: 3
+          maxLength: 20
+          pattern: '^[A-Za-z0-9_-]{3,20}$'
+          description: Unique pseudonymous handle, 3–20 characters [A-Za-z0-9_-].
+          example: bull_42
+        leaderboard_opt_in:
+          type: boolean
+          description: Whether to appear on public leaderboards.
+
+    LeaderboardMetric:
+      type: string
+      enum: [return, sharpe]
+      description: Ranking metric for the leaderboard.
+
+    LeaderboardEntry:
+      type: object
+      description: One ranked leaderboard entry (story NW-13). Exposes no internal ID, email or balance.
+      required: [rank, display_name, total_return_pct, sharpe_ratio, max_drawdown_pct, is_me]
+      properties:
+        rank:
+          type: integer
+          minimum: 1
+          description: Rank (1-based). Ties broken by earlier opted_in_at.
+        display_name:
+          type: string
+          description: Unique pseudonymous handle.
+        total_return_pct:
+          type: number
+          description: Total return in percent, 2 decimals.
+        sharpe_ratio:
+          type: [number, "null"]
+          description: Annualized Sharpe ratio, 2 decimals (null if insufficient data).
+        max_drawdown_pct:
+          type: [number, "null"]
+          description: Maximum drawdown in percent, 2 decimals (null if insufficient data).
+        is_me:
+          type: boolean
+          description: True when this entry belongs to the caller.
+
+    LeaderboardPage:
+      type: object
+      description: A page of ranked leaderboard entries.
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/LeaderboardEntry" }
+          description: Leaderboard entries ordered by rank. The caller's own entry is appended if outside the page.
+
   responses:
     Unauthenticated:
       description: Missing, unknown or expired session.
@@ -805,6 +869,37 @@ paths:
               schema: { $ref: "#/components/schemas/Profile" }
         "401":
           $ref: "#/components/responses/Unauthenticated"
+
+  /me:
+    patch:
+      summary: Update the signed-in user's profile
+      description: |
+        Updates the user's pseudonymous display name and/or leaderboard opt-in status (story NW-13).
+        Display name must be 3–20 characters [A-Za-z0-9_-] and unique (case-insensitive).
+      operationId: updateProfile
+      tags: [User]
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateProfileRequest" }
+      responses:
+        "200":
+          description: Updated profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Profile" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "409":
+          description: Display name already taken (case-insensitive).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "display name already taken", code: CONFLICT }
 
   /admin/users/{id}:
     delete:
@@ -1417,3 +1512,42 @@ paths:
                       - { label: Cash, orderbook_id: null, value: 89964.97, weight: 90.00 }
         "401":
           $ref: "#/components/responses/Unauthenticated"
+
+  /leaderboard:
+    get:
+      summary: Public leaderboard ranked by return or Sharpe ratio
+      description: |
+        Materialized rankings refreshed every LEADERBOARD_REFRESH (story NW-13).
+        metric=return ranks all opted-in users by total_return_pct.
+        metric=sharpe ranks only users with sufficient data by sharpe_ratio.
+        Ties are broken by earlier opted_in_at.
+      operationId: getLeaderboard
+      tags: [Leaderboard]
+      security:
+        - {}
+        - sessionCookie: []
+      parameters:
+        - name: metric
+          in: query
+          required: true
+          description: Ranking metric.
+          schema:
+            $ref: "#/components/schemas/LeaderboardMetric"
+          example: return
+        - name: limit
+          in: query
+          required: false
+          description: Maximum entries to return (1–100, default 50).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        "200":
+          description: Ranked leaderboard entries.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LeaderboardPage" }
+        "400":
+          $ref: "#/components/responses/ValidationError"
