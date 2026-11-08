@@ -14,15 +14,16 @@ func TestHealthReturnsStatusVersionFeaturesAndProvider(t *testing.T) {
 		name     string
 		features domain.Features
 		provider string
+		llm      string
 	}{
-		{"avanza, guest on", domain.Features{GuestAuth: true}, "avanza"},
-		{"avanza, guest off", domain.Features{}, "avanza"},
-		{"simulated, sim control on", domain.Features{GuestAuth: true, SimControl: true}, "simulated"},
-		{"simulated, sim control off", domain.Features{GuestAuth: false, SimControl: false}, "simulated"},
+		{"avanza, guest on", domain.Features{GuestAuth: true}, "avanza", "anthropic"},
+		{"avanza, guest off", domain.Features{}, "avanza", "anthropic"},
+		{"simulated, sim control on", domain.Features{GuestAuth: true, SimControl: true}, "simulated", "fake"},
+		{"simulated, sim control off", domain.Features{GuestAuth: false, SimControl: false}, "simulated", "anthropic"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r := newEngine(NewHealthHandler(tc.features, tc.provider))
+			r := newEngine(NewHealthHandler(tc.features, tc.provider, tc.llm))
 
 			w := do(t, r, http.MethodGet, "/api/v1/health", "", nil)
 
@@ -39,6 +40,9 @@ func TestHealthReturnsStatusVersionFeaturesAndProvider(t *testing.T) {
 			if body.Features != tc.features {
 				t.Fatalf("features = %+v, want %+v", body.Features, tc.features)
 			}
+			if body.LLMProvider != tc.llm {
+				t.Fatalf("llm_provider = %q, want %q", body.LLMProvider, tc.llm)
+			}
 			if body.MarketDataProvider != tc.provider {
 				t.Fatalf("market_data_provider = %q, want %q", body.MarketDataProvider, tc.provider)
 			}
@@ -47,9 +51,13 @@ func TestHealthReturnsStatusVersionFeaturesAndProvider(t *testing.T) {
 			var raw struct {
 				Features           map[string]json.RawMessage `json:"features"`
 				MarketDataProvider *string                    `json:"market_data_provider"`
+				LLMProvider        *string                    `json:"llm_provider"`
 			}
 			if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
 				t.Fatalf("decode raw body: %v", err)
+			}
+			if raw.LLMProvider == nil || *raw.LLMProvider != tc.llm {
+				t.Fatalf("body %s: llm_provider missing or wrong, want %q", w.Body.String(), tc.llm)
 			}
 			if raw.MarketDataProvider == nil || *raw.MarketDataProvider != tc.provider {
 				t.Fatalf("body %s: market_data_provider missing or wrong, want %q", w.Body.String(), tc.provider)

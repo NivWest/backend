@@ -10,16 +10,17 @@ import (
 )
 
 // HealthHandler reports liveness, the running build version, the enabled features and the active
-// market data provider. Used by local stacks, E2E runs and (later) Cloud Run health checks.
+// market data and LLM providers. Used by local stacks, E2E runs and (later) Cloud Run health checks.
 type HealthHandler struct {
 	features           domain.Features
 	marketDataProvider string
+	llmProvider        string
 }
 
-// NewHealthHandler takes the deployment's feature switches and the active market data provider
-// ("avanza" or "simulated", MARKET_DATA_PROVIDER).
-func NewHealthHandler(features domain.Features, marketDataProvider string) *HealthHandler {
-	return &HealthHandler{features: features, marketDataProvider: marketDataProvider}
+// NewHealthHandler takes the deployment's feature switches, the active market data provider
+// ("avanza" or "simulated", MARKET_DATA_PROVIDER) and the active LLM provider ("anthropic" or "fake", LLM_PROVIDER).
+func NewHealthHandler(features domain.Features, marketDataProvider, llmProvider string) *HealthHandler {
+	return &HealthHandler{features: features, marketDataProvider: marketDataProvider, llmProvider: llmProvider}
 }
 
 func (h *HealthHandler) Register(v1 *gin.RouterGroup) {
@@ -33,5 +34,6 @@ func (h *HealthHandler) Health(c *gin.Context) {
 		Features: h.features,
 
 		MarketDataProvider: h.marketDataProvider,
+		LLMProvider:        h.llmProvider,
 	})
 }
