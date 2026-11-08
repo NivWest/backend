@@ -1,4 +1,4 @@
-.PHONY: db run build up down clean
+.PHONY: db run build up down clean logs api-lint
 
 VERSION := $(shell cat VERSION 2>/dev/null || echo dev)
 LDFLAGS := -X backend/internal/version.Version=$(VERSION)
@@ -33,3 +33,9 @@ logs:
 	docker compose logs -f api
 
 
+
+# Lint the OpenAPI contract (api/openapi.yaml) with Redocly; rules in redocly.yaml. Needs Node and network
+# for npx, so it runs in CI (job api-contract), not in the offline fast checks.
+REDOCLY_VERSION := 2.11.0
+api-lint:
+	npx --yes @redocly/cli@$(REDOCLY_VERSION) lint api/openapi.yaml

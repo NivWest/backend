@@ -1,12 +1,38 @@
 openapi: 3.1.0
 info:
-  title: NivWest API
-  version: 0.1.0
+  title: TradeEdu API
+  version: 0.0.0
+  summary: Virtual stock trading simulator API (NivWest backend).
   description: |
     Cross-repo source of truth for the NivWest backend API. Each story adds its paths here in its contract step.
-    Errors on new and changed endpoints use the `Error` schema: `{"error": "<human message>", "code": "<UPPER_SNAKE>"}`.
+    The backend serves this file at `GET /api/v1/openapi.yaml` and an interactive reference at `GET /api/docs`.
+    A route parity test (`internal/handlers/openapi_parity_test.go`) fails when a mounted route is missing here or a
+    path here has no route, and the frontend generates its types from a vendored copy (`npm run api:gen`).
+
+    Errors use the `Error` schema: `{"error": "<human message>", "code": "<ErrorCode>"}`.
+
+    `info.version` always equals the backend's `VERSION` file (enforced by `api/spec_test.go`).
 servers:
   - url: /api/v1
+    description: This deployment
+
+tags:
+  - name: Meta
+    description: Health and this contract.
+  - name: Auth
+    description: Google OAuth (PKCE) sign-in, the guest demo login and sign-out (story NW-01).
+  - name: User
+    description: The signed-in user's profile and admin user management.
+  - name: Market data
+    description: Public, rate-limited instrument search, quotes, details and candles (story NW-03).
+  - name: Simulated market (dev/test)
+    description: Price pinning for the simulated market. Mounted only with MARKET_SIM_CONTROL_ENABLED=true; never in production.
+  - name: Orders
+    description: Market order execution (NW-04) and order history (NW-05).
+  - name: Watchlists
+    description: Up to 10 named watchlists per user with live prices (story NW-06).
+  - name: Portfolio
+    description: Cash, positions at live prices, unrealized and realized P&L (story NW-05).
 
 components:
   securitySchemes:
@@ -17,17 +43,37 @@ components:
       description: HttpOnly session cookie set by the Google callback or POST /auth/guest.
 
   schemas:
+    ErrorCode:
+      type: string
+      description: |
+        Stable machine-readable error code. Every `domain.Code*` constant in the backend is listed here and nothing
+        else (enforced by `internal/handlers/openapi_parity_test.go`).
+      enum:
+        - VALIDATION_ERROR
+        - UNAUTHENTICATED
+        - FORBIDDEN
+        - USER_NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+        - INSTRUMENT_NOT_FOUND
+        - MARKET_DATA_UNAVAILABLE
+        - INSUFFICIENT_FUNDS
+        - INSUFFICIENT_SHARES
+        - CONFLICT
+        - WATCHLIST_NOT_FOUND
+        - WATCHLIST_ITEM_NOT_FOUND
+        - WATCHLIST_LIMIT_REACHED
+
     Error:
       type: object
+      description: The body of every error response.
       required: [error, code]
       properties:
         error:
           type: string
           description: Human-readable message.
         code:
-          type: string
-          description: Stable UPPER_SNAKE code.
-          examples: [UNAUTHENTICATED, FORBIDDEN, RATE_LIMITED, VALIDATION_ERROR, USER_NOT_FOUND, INSTRUMENT_NOT_FOUND, MARKET_DATA_UNAVAILABLE, INSUFFICIENT_FUNDS, INSUFFICIENT_SHARES, CONFLICT, WATCHLIST_NOT_FOUND, WATCHLIST_ITEM_NOT_FOUND, WATCHLIST_LIMIT_REACHED, INTERNAL_ERROR]
+          $ref: "#/components/schemas/ErrorCode"
 
     Role:
       type: string
@@ -417,14 +463,30 @@ components:
         orderbook_id: { type: string }
         symbol: { type: string }
         name: { type: string }
-        quantity: { type: number, description: Up to 4 decimals. }
-        avg_cost: { type: number, description: SEK per share incl. buy commission, 2 decimals. }
-        last_price: { type: number, description: SEK, 2 decimals. }
-        market_value: { type: number, description: SEK, 2 decimals. }
-        unrealized_pnl: { type: number, description: SEK, 2 decimals. }
-        unrealized_pnl_percent: { type: number, description: Percent, 2 decimals (9.62 means +9.62%). }
-        day_change_percent: { type: number, description: The quote's change today in percent, 2 decimals. }
-        weight: { type: number, description: Percent of holdings_value, 2 decimals. }
+        quantity:
+          type: number
+          description: Up to 4 decimals.
+        avg_cost:
+          type: number
+          description: SEK per share incl. buy commission, 2 decimals.
+        last_price:
+          type: number
+          description: SEK, 2 decimals.
+        market_value:
+          type: number
+          description: SEK, 2 decimals.
+        unrealized_pnl:
+          type: number
+          description: SEK, 2 decimals.
+        unrealized_pnl_percent:
+          type: number
+          description: "Percent, 2 decimals (9.62 means +9.62%)."
+        day_change_percent:
+          type: number
+          description: The quote's change today in percent, 2 decimals.
+        weight:
+          type: number
+          description: Percent of holdings_value, 2 decimals.
 
     Portfolio:
       type: object
@@ -456,50 +518,50 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
-          example: { error: authentication required, code: UNAUTHENTICATED }
+          example: { error: "authentication required", code: UNAUTHENTICATED }
     Forbidden:
       description: Signed in, but the role is not allowed.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
-          example: { error: forbidden, code: FORBIDDEN }
+          example: { error: "forbidden", code: FORBIDDEN }
     ValidationError:
       description: Invalid input.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
-          example: { error: period must be one of 1d, 1w, 1m, 3m, 1y, code: VALIDATION_ERROR }
+          example: { error: "period must be one of 1d, 1w, 1m, 3m, 1y", code: VALIDATION_ERROR }
     InstrumentNotFound:
       description: Unknown orderbook id.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
-          example: { error: instrument not found, code: INSTRUMENT_NOT_FOUND }
+          example: { error: "instrument not found", code: INSTRUMENT_NOT_FOUND }
     MarketDataUnavailable:
       description: The market data upstream failed.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
-          example: { error: market data unavailable, code: MARKET_DATA_UNAVAILABLE }
+          example: { error: "market data unavailable", code: MARKET_DATA_UNAVAILABLE }
     RateLimited:
       description: Too many requests from this IP (5 per second, burst 10, shared by every /market route).
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
-          example: { error: too many requests, please try again later, code: RATE_LIMITED }
+          example: { error: "too many requests, please try again later", code: RATE_LIMITED }
 
     WatchlistNotFound:
       description: No list with this id belongs to the signed-in user (another user's list is reported the same way).
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
-          example: { error: watchlist not found, code: WATCHLIST_NOT_FOUND }
+          example: { error: "watchlist not found", code: WATCHLIST_NOT_FOUND }
     WatchlistValidationError:
       description: Malformed JSON, a non-numeric list id, or a name that is blank or longer than 50 characters after trimming.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
-          example: { error: name must be at most 50 characters, code: VALIDATION_ERROR }
+          example: { error: "name must be at most 50 characters", code: VALIDATION_ERROR }
 
   parameters:
     OrderbookID:
@@ -520,26 +582,54 @@ paths:
     get:
       summary: Liveness, build version and enabled features
       operationId: getHealth
+      tags: [Meta]
+      security: []
       responses:
         "200":
           description: OK
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Health" }
-              example: { status: ok, version: 0.1.0, market_data_provider: simulated, features: { guest_auth: true, sim_control: true } }
+              example: { status: ok, version: 0.0.0, market_data_provider: simulated, features: { guest_auth: true, sim_control: true } }
+
+  /openapi.yaml:
+    get:
+      summary: This OpenAPI document
+      description: |
+        The contract the running build was compiled with (embedded with `go:embed`). Public, no session needed.
+        The interactive reference at `GET /api/docs` (outside `/api/v1`, so not listed here) renders it.
+      operationId: getOpenAPISpec
+      tags: [Meta]
+      security: []
+      responses:
+        "200":
+          description: The OpenAPI 3.1 document.
+          content:
+            application/yaml:
+              schema: { type: string }
 
   /auth/login:
     get:
       summary: Start Google OAuth (PKCE); redirects to Google
       operationId: login
+      tags: [Auth]
+      security: []
       responses:
         "302":
           description: Redirect to Google. Sets the HttpOnly oauth_state cookie.
+        "500":
+          description: The OAuth state could not be created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "failed to start login", code: INTERNAL_ERROR }
 
   /auth/callback:
     get:
       summary: Google OAuth callback; sets session_id and redirects to the frontend
       operationId: callback
+      tags: [Auth]
+      security: []
       parameters:
         - { name: state, in: query, required: true, schema: { type: string } }
         - { name: code, in: query, required: true, schema: { type: string } }
@@ -547,12 +637,17 @@ paths:
         "302":
           description: Redirect to FRONTEND_URL/dashboard. Sets the HttpOnly session_id cookie.
         "400":
-          description: Invalid OAuth state.
+          description: The state does not match the oauth_state cookie.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "invalid OAuth state", code: VALIDATION_ERROR }
         "401":
-          $ref: "#/components/responses/Unauthenticated"
+          description: Google rejected the code.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "Google authentication failed", code: UNAUTHENTICATED }
 
   /auth/guest:
     post:
@@ -564,6 +659,8 @@ paths:
         (AUTH_GUEST_RATE_LIMIT_PER_MINUTE, default 10 per minute). Guests are hard-deleted 24h after
         their newest session expired.
       operationId: loginAsGuest
+      tags: [Auth]
+      security: []
       responses:
         "201":
           description: Guest created and signed in.
@@ -582,19 +679,21 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-              example: { error: too many guest logins, please try again later, code: RATE_LIMITED }
+              example: { error: "too many guest logins, please try again later", code: RATE_LIMITED }
         "500":
           description: Could not create the guest.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-              example: { error: failed to create guest, code: INTERNAL_ERROR }
+              example: { error: "failed to create guest", code: INTERNAL_ERROR }
 
   /auth/logout:
     post:
       summary: End the current session
       description: Deletes the session (if any) and clears the session_id cookie. Always 204.
       operationId: logout
+      tags: [Auth]
+      security: []
       responses:
         "204":
           description: Signed out.
@@ -603,6 +702,7 @@ paths:
     get:
       summary: The signed-in user's profile
       operationId: getProfile
+      tags: [User]
       security: [{ sessionCookie: [] }]
       responses:
         "200":
@@ -617,6 +717,7 @@ paths:
     delete:
       summary: Delete a user (admin only)
       operationId: deleteUser
+      tags: [User]
       security: [{ sessionCookie: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer, format: int64, minimum: 1 } }
@@ -628,7 +729,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-              example: { error: invalid user ID, code: VALIDATION_ERROR }
+              example: { error: "invalid user ID", code: VALIDATION_ERROR }
         "401":
           $ref: "#/components/responses/Unauthenticated"
         "403":
@@ -638,7 +739,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-              example: { error: user not found, code: USER_NOT_FOUND }
+              example: { error: "user not found", code: USER_NOT_FOUND }
 
   # Market data (story NW-03). Public (no session needed) and rate-limited per client IP.
   # Served by the provider chosen with MARKET_DATA_PROVIDER (avanza | simulated).
@@ -646,6 +747,8 @@ paths:
     get:
       summary: Search instruments
       operationId: searchInstruments
+      tags: ["Market data"]
+      security: []
       parameters:
         - name: q
           in: query
@@ -674,6 +777,8 @@ paths:
     get:
       summary: Instrument details and key indicators
       operationId: getInstrumentDetails
+      tags: ["Market data"]
+      security: []
       parameters:
         - $ref: "#/components/parameters/OrderbookID"
       responses:
@@ -693,6 +798,8 @@ paths:
     get:
       summary: Latest quote with bid and ask
       operationId: getQuote
+      tags: ["Market data"]
+      security: []
       parameters:
         - $ref: "#/components/parameters/OrderbookID"
       responses:
@@ -713,6 +820,8 @@ paths:
     get:
       summary: OHLCV candles for a chart period
       operationId: getCandles
+      tags: ["Market data"]
+      security: []
       parameters:
         - $ref: "#/components/parameters/OrderbookID"
         - name: period
@@ -741,6 +850,8 @@ paths:
       summary: Pin the last price of a simulated instrument
       description: Until the pin is cleared, quote/search/details report exactly this last price (bid/ask follow the 20 bps spread). Candles ignore pins.
       operationId: pinSimPrice
+      tags: ["Simulated market (dev/test)"]
+      security: []
       parameters:
         - $ref: "#/components/parameters/OrderbookID"
       requestBody:
@@ -757,13 +868,15 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-              example: { error: price must be greater than 0, code: VALIDATION_ERROR }
+              example: { error: "price must be greater than 0", code: VALIDATION_ERROR }
         "404":
           $ref: "#/components/responses/InstrumentNotFound"
     delete:
       summary: Clear the pinned price
       description: Idempotent. The price follows the simulated path again.
       operationId: clearSimPrice
+      tags: ["Simulated market (dev/test)"]
+      security: []
       parameters:
         - $ref: "#/components/parameters/OrderbookID"
       responses:
@@ -777,6 +890,7 @@ paths:
       summary: List the signed-in user's orders
       description: Newest first (created_at desc, then id desc), keyset-paginated with an opaque cursor. Other users' orders are never returned.
       operationId: listOrders
+      tags: [Orders]
       security: [{ sessionCookie: [] }]
       parameters:
         - name: limit
@@ -815,7 +929,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-              example: { error: limit must be an integer from 1 to 100, code: VALIDATION_ERROR }
+              example: { error: "limit must be an integer from 1 to 100", code: VALIDATION_ERROR }
         "401":
           $ref: "#/components/responses/Unauthenticated"
     post:
@@ -829,6 +943,7 @@ paths:
         (200, identical body) and executes nothing; the same key with a different body is 409 CONFLICT.
         Keys are unique per user, also under concurrent retries.
       operationId: placeOrder
+      tags: [Orders]
       security: [{ sessionCookie: [] }]
       parameters:
         - name: Idempotency-Key
@@ -876,7 +991,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-              example: { error: quantity must be greater than 0, code: VALIDATION_ERROR }
+              example: { error: "quantity must be greater than 0", code: VALIDATION_ERROR }
         "401":
           $ref: "#/components/responses/Unauthenticated"
         "404":
@@ -886,15 +1001,15 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-              example: { error: idempotency key already used for a different order, code: CONFLICT }
+              example: { error: "idempotency key already used for a different order", code: CONFLICT }
         "422":
           description: Business rule; nothing was executed.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
               examples:
-                funds: { value: { error: not enough cash for this order, code: INSUFFICIENT_FUNDS } }
-                shares: { value: { error: not enough shares to sell, code: INSUFFICIENT_SHARES } }
+                funds: { value: { error: "not enough cash for this order", code: INSUFFICIENT_FUNDS } }
+                shares: { value: { error: "not enough shares to sell", code: INSUFFICIENT_SHARES } }
         "502":
           $ref: "#/components/responses/MarketDataUnavailable"
 
@@ -904,6 +1019,7 @@ paths:
     get:
       summary: The signed-in user's watchlists with live prices
       operationId: listWatchlists
+      tags: [Watchlists]
       security: [{ sessionCookie: [] }]
       responses:
         "200":
@@ -925,6 +1041,7 @@ paths:
       summary: Create a watchlist
       description: A user has at most 10 lists; the 11th is 422 WATCHLIST_LIMIT_REACHED. Names need not be unique.
       operationId: createWatchlist
+      tags: [Watchlists]
       security: [{ sessionCookie: [] }]
       requestBody:
         required: true
@@ -948,7 +1065,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-              example: { error: you can have at most 10 watchlists, code: WATCHLIST_LIMIT_REACHED }
+              example: { error: "you can have at most 10 watchlists", code: WATCHLIST_LIMIT_REACHED }
 
   /watchlists/{id}:
     parameters:
@@ -956,6 +1073,7 @@ paths:
     get:
       summary: One watchlist with live prices
       operationId: getWatchlist
+      tags: [Watchlists]
       security: [{ sessionCookie: [] }]
       responses:
         "200":
@@ -972,6 +1090,7 @@ paths:
     patch:
       summary: Rename a watchlist
       operationId: renameWatchlist
+      tags: [Watchlists]
       security: [{ sessionCookie: [] }]
       requestBody:
         required: true
@@ -994,6 +1113,7 @@ paths:
     delete:
       summary: Delete a watchlist and its items
       operationId: deleteWatchlist
+      tags: [Watchlists]
       security: [{ sessionCookie: [] }]
       responses:
         "204":
@@ -1014,6 +1134,7 @@ paths:
         The list's ownership is checked first (404 WATCHLIST_NOT_FOUND), then the instrument (404 INSTRUMENT_NOT_FOUND),
         then uniqueness: an instrument is on a list at most once (409 CONFLICT).
       operationId: addWatchlistItem
+      tags: [Watchlists]
       security: [{ sessionCookie: [] }]
       requestBody:
         required: true
@@ -1033,7 +1154,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-              example: { error: orderbook_id is required, code: VALIDATION_ERROR }
+              example: { error: "orderbook_id is required", code: VALIDATION_ERROR }
         "401":
           $ref: "#/components/responses/Unauthenticated"
         "404":
@@ -1042,14 +1163,14 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
               examples:
-                watchlist: { value: { error: watchlist not found, code: WATCHLIST_NOT_FOUND } }
-                instrument: { value: { error: instrument not found, code: INSTRUMENT_NOT_FOUND } }
+                watchlist: { value: { error: "watchlist not found", code: WATCHLIST_NOT_FOUND } }
+                instrument: { value: { error: "instrument not found", code: INSTRUMENT_NOT_FOUND } }
         "409":
           description: The instrument is already on this list.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-              example: { error: instrument is already on this watchlist, code: CONFLICT }
+              example: { error: "instrument is already on this watchlist", code: CONFLICT }
         "502":
           $ref: "#/components/responses/MarketDataUnavailable"
 
@@ -1060,6 +1181,7 @@ paths:
     delete:
       summary: Remove an instrument from a watchlist
       operationId: removeWatchlistItem
+      tags: [Watchlists]
       security: [{ sessionCookie: [] }]
       responses:
         "204":
@@ -1074,8 +1196,8 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
               examples:
-                watchlist: { value: { error: watchlist not found, code: WATCHLIST_NOT_FOUND } }
-                item: { value: { error: instrument is not on this watchlist, code: WATCHLIST_ITEM_NOT_FOUND } }
+                watchlist: { value: { error: "watchlist not found", code: WATCHLIST_NOT_FOUND } }
+                item: { value: { error: "instrument is not on this watchlist", code: WATCHLIST_ITEM_NOT_FOUND } }
 
   /portfolio:
     get:
@@ -1084,6 +1206,7 @@ paths:
         Cash, open positions valued at live quotes (fetched concurrently; a failed quote falls back to avg_cost),
         unrealized and realized P&L. Replaces the old GET /portfolio/dashboard, which is removed.
       operationId: getPortfolio
+      tags: [Portfolio]
       security: [{ sessionCookie: [] }]
       responses:
         "200":
