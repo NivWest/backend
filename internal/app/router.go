@@ -45,6 +45,7 @@ func (a *App) registrars() []Registrar {
 	add(a.PortfolioHandler == nil, a.PortfolioHandler)
 	add(a.OrderHandler == nil, a.OrderHandler)
 	add(a.WatchlistHandler == nil, a.WatchlistHandler)
+	add(a.AIHandler == nil, a.AIHandler)
 	add(a.AnalyticsHandler == nil, a.AnalyticsHandler)
 	add(a.VaultHandler == nil, a.VaultHandler)
 	add(a.LeaderboardHandler == nil, a.LeaderboardHandler)

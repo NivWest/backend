@@ -94,13 +94,15 @@ type HealthResponse struct {
 	Features Features `json:"features"`
 	// MarketDataProvider is the active market data adapter: "avanza" or "simulated" (MARKET_DATA_PROVIDER).
 	MarketDataProvider string `json:"market_data_provider"`
+	// LLMProvider is the active LLM adapter behind the AI gateway: "anthropic" or "fake" (LLM_PROVIDER).
+	LLMProvider string `json:"llm_provider"`
 }
 
 // GuestRepository removes expired guest accounts.
 type GuestRepository interface {
 	// DeleteExpiredGuests hard-deletes (Unscoped) every user with Role == RoleGuest that was created
 	// before cutoff and has no session with expires_at >= cutoff, together with its dependent rows:
-	// sessions, positions, transactions, orders, equity snapshots, watchlist items, watchlists and user_favorites.
+	// sessions, positions, transactions, orders, equity snapshots, watchlist items, watchlists, AI usage rows and user_favorites.
 	// It runs in one transaction and returns the number of users deleted.
 	DeleteExpiredGuests(ctx context.Context, cutoff time.Time) (int64, error)
 }

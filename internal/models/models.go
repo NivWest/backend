@@ -140,6 +140,36 @@ type WatchlistItem struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
+// AIUsage is the LLM usage ledger (story NW-14): one row per model call, written by services.AIGateway
+// after every call, successful or not. The per-user daily budget sums today's rows.
+type AIUsage struct {
+	ID               uint            `gorm:"primaryKey"`
+	UserID           uint            `gorm:"not null;index:idx_ai_usages_user_created,priority:1"`
+	Feature          string          `gorm:"type:varchar(40);not null"`
+	Model            string          `gorm:"type:varchar(80);not null"`
+	PromptVersion    string          `gorm:"type:varchar(60);not null"`
+	InputTokens      int64           `gorm:"not null;default:0"`
+	OutputTokens     int64           `gorm:"not null;default:0"`
+	CacheReadTokens  int64           `gorm:"not null;default:0"`
+	CacheWriteTokens int64           `gorm:"not null;default:0"`
+	LatencyMs        int64           `gorm:"not null;default:0"`
+	Status           string          `gorm:"type:varchar(10);not null"` // ok | error | refused
+	FallbackModel    string          `gorm:"type:varchar(80);not null;default:''"`
+	CostUSD          decimal.Decimal `gorm:"column:cost_usd;type:numeric(14,6);not null;default:0"`
+	CreatedAt        time.Time       `gorm:"not null;index:idx_ai_usages_user_created,priority:2"`
+}
+
+// AIInstrumentBrief caches one AI brief per instrument, UTC day and prompt version, shared by every user (story NW-14).
+type AIInstrumentBrief struct {
+	ID            uint      `gorm:"primaryKey"`
+	OrderbookID   string    `gorm:"not null;uniqueIndex:idx_ai_briefs_key,priority:1"`
+	UTCDate       string    `gorm:"column:utc_date;type:varchar(10);not null;uniqueIndex:idx_ai_briefs_key,priority:2"`
+	PromptVersion string    `gorm:"type:varchar(60);not null;uniqueIndex:idx_ai_briefs_key,priority:3"`
+	Model         string    `gorm:"type:varchar(80);not null"`
+	BriefJSON     string    `gorm:"column:brief_json;type:text;not null"`
+	GeneratedAt   time.Time `gorm:"not null"`
+}
+
 // EquitySnapshot is one valuation of a user's account at time T (story NW-10): cash, holdings at the last
 // price, the vault (0 until NW-11) and their sum. One is written after every fill and every SNAPSHOT_INTERVAL
 // for users with an order. (user_id, t) is indexed for the per-user history and analytics reads.

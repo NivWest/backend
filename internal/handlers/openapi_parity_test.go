@@ -19,6 +19,7 @@ import (
 	"backend/internal/config"
 	"backend/internal/domain"
 	"backend/internal/handlers"
+	"backend/internal/llm/fake"
 	"backend/internal/services"
 	"backend/internal/testutil"
 
@@ -74,8 +75,9 @@ func fullApp() *app.App {
 	users := testutil.NewUserRepo()
 	auth := testutil.NewAuthRepo()
 	provider := &testutil.MarketProvider{}
+	gateway := services.NewAIGateway(fake.New(), testutil.NewAIUsageRepo(), 0, time.Second, nil, nil)
 	return &app.App{
-		HealthHandler:  handlers.NewHealthHandler(domain.Features{GuestAuth: true, SimControl: true}, config.MarketProviderSimulated),
+		HealthHandler:  handlers.NewHealthHandler(domain.Features{GuestAuth: true, SimControl: true}, config.MarketProviderSimulated, config.LLMProviderFake),
 		OpenAPIHandler: handlers.NewOpenAPIHandler(api.OpenAPISpec),
 		UserHandler:    handlers.NewUserHandler(services.NewUserService(users), auth),
 		MarketHandler:  handlers.NewMarketHandler(services.NewMarketService(provider)),
@@ -86,6 +88,8 @@ func fullApp() *app.App {
 		PortfolioHandler: handlers.NewPortfolioHandler(services.NewPortfolioService(&testutil.PortfolioRepo{}, provider, users), auth),
 		OrderHandler:     handlers.NewOrderHandler(services.NewOrderService(&testutil.OrderRepo{}, provider), auth),
 		WatchlistHandler: handlers.NewWatchlistHandler(services.NewWatchlistService(testutil.NewWatchlistRepo(), provider), auth),
+		AIHandler: handlers.NewAIHandler(
+			services.NewAIBriefService(gateway, provider, testutil.NewAIBriefRepo(), nil), gateway, auth),
 		AnalyticsHandler: handlers.NewAnalyticsHandler(services.NewAnalyticsService(&testutil.SnapshotRepo{},
 			services.NewPortfolioService(&testutil.PortfolioRepo{}, provider, users), 0.02, nil), auth),
 		VaultHandler: handlers.NewVaultHandler(services.NewVaultService(testutil.NewVaultRepo(users), users, 0.051, nil), auth),

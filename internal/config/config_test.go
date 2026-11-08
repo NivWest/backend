@@ -153,6 +153,55 @@ func TestLoad_InvalidMarketProviderErrors(t *testing.T) {
 	}
 }
 
+func TestLoad_LLM(t *testing.T) {
+	cases := []struct {
+		name    string
+		env     map[string]string
+		want    LLM
+		wantErr string
+	}{
+		{
+			name: "defaults",
+			env:  map[string]string{"LLM_PROVIDER": "", "LLM_MODEL": "", "LLM_TIMEOUT": "", "AI_DAILY_TOKEN_BUDGET": ""},
+			want: LLM{Provider: LLMProviderAnthropic, Model: "claude-opus-5-5", Timeout: 60 * time.Second, DailyTokenBudget: 200000},
+		},
+		{
+			name: "fake provider and overrides",
+			env:  map[string]string{"LLM_PROVIDER": " Fake ", "LLM_MODEL": "claude-sonnet-5-5", "LLM_TIMEOUT": "5s", "AI_DAILY_TOKEN_BUDGET": "1000"},
+			want: LLM{Provider: LLMProviderFake, Model: "claude-sonnet-5-5", Timeout: 5 * time.Second, DailyTokenBudget: 1000},
+		},
+		{
+			name:    "unknown provider",
+			env:     map[string]string{"LLM_PROVIDER": "openai"},
+			wantErr: "LLM_PROVIDER",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			cfg, err := Load("")
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("Load() error = %v, want one mentioning %s", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			got := cfg.LLM
+			if got.Provider != tc.want.Provider || got.Model != tc.want.Model || got.Timeout != tc.want.Timeout || got.DailyTokenBudget != tc.want.DailyTokenBudget {
+				t.Fatalf("LLM = %+v, want %+v", got, tc.want)
+			}
+			if p, ok := got.Prices["claude-opus-5-5"]; !ok || p.InputPerMTok != 4 || p.OutputPerMTok != 20 || p.CacheReadPerMTok != 0.20 {
+				t.Fatalf("price of claude-opus-5-5 = %+v, want $4/$20/$0.20 per MTok", p)
+			}
+		})
+	}
+}
+
 func TestLoad_MarketStream(t *testing.T) {
 	tests := []struct {
 		name                string

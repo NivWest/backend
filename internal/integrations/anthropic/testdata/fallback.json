@@ -1,0 +1,22 @@
+{
+  "id": "msg_01FixtureFallback",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-opus-4-8",
+  "content": [
+    {"type": "fallback", "from": {"model": "claude-opus-5-5"}, "to": {"model": "claude-opus-4-8"}},
+    {"type": "text", "text": "{\"summary\":\"s\",\"what_the_numbers_say\":[],\"risks\":[],\"beginner_takeaway\":\"t\"}"}
+  ],
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 310,
+    "output_tokens": 40,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "iterations": [
+      {"type": "message", "model": "claude-opus-5-5", "input_tokens": 310, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
+      {"type": "fallback_message", "model": "claude-opus-4-8", "input_tokens": 310, "output_tokens": 40, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+    ]
+  }
+}
