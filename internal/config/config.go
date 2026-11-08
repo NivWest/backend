@@ -19,8 +19,9 @@ type Config struct {
 	Market    Market
 	RateLimit RateLimit
 	Auth      Auth
-	Analytics Analytics
-	LLM       LLM
+	Analytics     Analytics
+	LLM           LLM
+	Observability Observability
 }
 
 type Server struct {
@@ -143,6 +144,13 @@ type Auth struct {
 	GuestRateLimitPerMinute int
 }
 
+// Observability configures structured logging, metrics and optional OpenTelemetry tracing (story NW-19).
+type Observability struct {
+	LogLevel     string // LOG_LEVEL: debug|info|warn|error (default info)
+	LogFormat    string // LOG_FORMAT: json|text (default json)
+	OtelEndpoint string // OTEL_EXPORTER_OTLP_ENDPOINT: optional endpoint
+}
+
 func Load(envFile string) (*Config, error) {
 	if envFile != "" {
 		_ = godotenv.Load(envFile)
@@ -159,6 +167,16 @@ func Load(envFile string) (*Config, error) {
 	}
 
 	llmProvider, err := getChoice("LLM_PROVIDER", LLMProviderAnthropic, LLMProviderAnthropic, LLMProviderFake)
+	if err != nil {
+		return nil, err
+	}
+
+	logLevel, err := getChoice("LOG_LEVEL", "info", "debug", "info", "warn", "error")
+	if err != nil {
+		return nil, err
+	}
+
+	logFormat, err := getChoice("LOG_FORMAT", "json", "json", "text")
 	if err != nil {
 		return nil, err
 	}
@@ -261,6 +279,12 @@ func Load(envFile string) (*Config, error) {
 			AnthropicAPIKey:  getEnv("ANTHROPIC_API_KEY", ""),
 			AnthropicBaseURL: strings.TrimSpace(getEnv("ANTHROPIC_BASE_URL", "")),
 			Prices:           DefaultModelPrices(),
+		},
+
+		Observability: Observability{
+			LogLevel:     logLevel,
+			LogFormat:    logFormat,
+			OtelEndpoint: strings.TrimSpace(getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "")),
 		},
 	}, nil
 }

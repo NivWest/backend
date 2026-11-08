@@ -263,3 +263,60 @@ func TestLoad_LLM(t *testing.T) {
 		})
 	}
 }
+
+func TestLoad_Observability(t *testing.T) {
+	cases := []struct {
+		name         string
+		env          map[string]string
+		wantLevel    string
+		wantFormat   string
+		wantEndpoint string
+		wantErr      string
+	}{
+		{
+			name:         "defaults",
+			env:          map[string]string{"LOG_LEVEL": "", "LOG_FORMAT": "", "OTEL_EXPORTER_OTLP_ENDPOINT": ""},
+			wantLevel:    "info",
+			wantFormat:   "json",
+			wantEndpoint: "",
+		},
+		{
+			name:         "overrides",
+			env:          map[string]string{"LOG_LEVEL": "DEBUG", "LOG_FORMAT": "Text", "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4317"},
+			wantLevel:    "debug",
+			wantFormat:   "text",
+			wantEndpoint: "http://collector:4317",
+		},
+		{
+			name:    "invalid level",
+			env:     map[string]string{"LOG_LEVEL": "verbose"},
+			wantErr: "LOG_LEVEL",
+		},
+		{
+			name:    "invalid format",
+			env:     map[string]string{"LOG_FORMAT": "xml"},
+			wantErr: "LOG_FORMAT",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			cfg, err := Load("")
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("Load() error = %v, want mentioning %s", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			obs := cfg.Observability
+			if obs.LogLevel != tc.wantLevel || obs.LogFormat != tc.wantFormat || obs.OtelEndpoint != tc.wantEndpoint {
+				t.Fatalf("Observability = %+v, want level=%s format=%s endpoint=%s", obs, tc.wantLevel, tc.wantFormat, tc.wantEndpoint)
+			}
+		})
+	}
+}
