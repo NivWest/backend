@@ -102,6 +102,13 @@ type Registrar interface {
 - Behaviour that needs real Postgres (locks, unique indexes, migrations) is covered by `internal/repository/order_integration_test.go` (build tag `integration`, `TEST_DATABASE_URL`; skipped by `go test ./...`).
 - **Order history** (`GET /orders`, story NW-05) is keyset-paginated, never `OFFSET`: `OrderRepository.ListByUser` (`internal/repository/order_list.go`) reads the user's orders by `(created_at, id)` descending over `idx_orders_user_created_id`, and from a cursor only rows with `(created_at, id) < (cursor)`. `OrderService.ListOrders` asks for `limit + 1` rows to know whether a `next_cursor` exists. The cursor is opaque base64url JSON (`{"c": created_at RFC3339Nano UTC, "i": id}`), encoded and decoded only in `internal/services/order_cursor.go`; a malformed one is a 400 `VALIDATION_ERROR`. `limit` is 1–100 (`domain.MaxOrderPageLimit`), default 20 (`domain.DefaultOrderPageLimit`). The response is `{items, next_cursor}`, `next_cursor` null on the last page.
 
+### 3.4a. Watchlists (story NW-06)
+- `domain.WatchlistRepository` (`internal/repository/watchlist.go`) is keyed by `orderbook_id` and **every query is scoped by `user_id`**: another user's list id is indistinguishable from a missing one (`ErrWatchlistNotFound`), never a 403.
+- At most `domain.MaxWatchlists` (10) lists per user: `Create` counts them in a transaction that locks the user row, so concurrent creates cannot exceed the limit. Names are trimmed and 1–50 characters (`WatchlistService`).
+- `watchlist_items` has the unique index `idx_watchlist_items_watchlist_stock (watchlist_id, stock_id)`; `AddItem` inserts with `ON CONFLICT DO NOTHING` and reports zero affected rows as `ErrDuplicateItem`. `migrate.go` deletes legacy duplicates (keeping the oldest) before AutoMigrate creates the index. Stocks come from the shared race-safe `ensureStockRow`.
+- `AddItem` checks ownership before the instrument, so another user's list never reveals whether an instrument exists.
+- Reads price every item from the live quote (each distinct orderbook id once, at most 8 in parallel); a failed quote leaves `last_price`/`change_percent` null instead of failing the read. Covered by `internal/repository/watchlist_integration_test.go` (tag `integration`).
+
 ### 3.5. Concurrent Quote Fetching
 - Run parallel fetches in goroutines using `sync.WaitGroup`.
 - Guard slice appends and shared data mutations with `sync.Mutex`, or let each goroutine write only its own pre-sized slice element.
@@ -113,6 +120,7 @@ type Registrar interface {
 - Repositories translate `gorm.ErrRecordNotFound` to domain errors.
 - Handlers map them to HTTP status codes (400, 401, 403, 404, 409, 422, 429, 500).
 - Standard JSON error format (`domain.ErrorResponse`, `api/openapi.yaml#/components/schemas/Error`): `{"error": "description of the error", "code": "MACHINE_CODE"}`. Codes live next to their errors (`internal/domain/auth.go`, `market.go`, `orders.go`).
+- Watchlist errors (`internal/domain/watchlist.go`, story NW-06): `ErrWatchlistNotFound` → 404 `WATCHLIST_NOT_FOUND` (also for another user's list), `ErrWatchlistItemNotFound` → 404 `WATCHLIST_ITEM_NOT_FOUND`, `ErrDuplicateItem` → 409 `CONFLICT`, `ErrWatchlistLimit` → 422 `WATCHLIST_LIMIT_REACHED`.
 - Order errors: `ErrInsufficientFunds` → 422 `INSUFFICIENT_FUNDS`, `ErrInsufficientShares` → 422 `INSUFFICIENT_SHARES`, `ErrIdempotencyKeyReused` → 409 `CONFLICT`; invalid requests (`*ValidationError`) → 400 `VALIDATION_ERROR`, unknown instruments → 404 `INSTRUMENT_NOT_FOUND`.
 
 ### 3.7. GORM Models & Automatic Migrations

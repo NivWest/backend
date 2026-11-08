@@ -318,62 +318,6 @@ func (r *OrderRepo) findLocked(userID uint, key string) *domain.Order {
 }
 
 // ---------------------------------------------------------------------------
-// WatchlistRepository
-// ---------------------------------------------------------------------------
-
-// WatchlistRepo is a fake domain.WatchlistRepository.
-type WatchlistRepo struct {
-	CreateFn            func(ctx context.Context, userID uint, name string) (*models.Watchlist, error)
-	GetUserWatchlistsFn func(ctx context.Context, userID uint) ([]models.Watchlist, error)
-	DeleteFn            func(ctx context.Context, userID, watchlistID uint) error
-	AddItemFn           func(ctx context.Context, userID, watchlistID, stockID uint) error
-	RemoveItemFn        func(ctx context.Context, userID, watchlistID uint, symbol string) error
-	EnsureStockFn       func(ctx context.Context, symbol, name string) (*models.Stock, error)
-}
-
-func (r *WatchlistRepo) Create(ctx context.Context, userID uint, name string) (*models.Watchlist, error) {
-	if r.CreateFn != nil {
-		return r.CreateFn(ctx, userID, name)
-	}
-	return &models.Watchlist{ID: 1, UserID: userID, Name: name}, nil
-}
-
-func (r *WatchlistRepo) GetUserWatchlists(ctx context.Context, userID uint) ([]models.Watchlist, error) {
-	if r.GetUserWatchlistsFn != nil {
-		return r.GetUserWatchlistsFn(ctx, userID)
-	}
-	return []models.Watchlist{}, nil
-}
-
-func (r *WatchlistRepo) Delete(ctx context.Context, userID, watchlistID uint) error {
-	if r.DeleteFn != nil {
-		return r.DeleteFn(ctx, userID, watchlistID)
-	}
-	return nil
-}
-
-func (r *WatchlistRepo) AddItem(ctx context.Context, userID, watchlistID, stockID uint) error {
-	if r.AddItemFn != nil {
-		return r.AddItemFn(ctx, userID, watchlistID, stockID)
-	}
-	return nil
-}
-
-func (r *WatchlistRepo) RemoveItem(ctx context.Context, userID, watchlistID uint, symbol string) error {
-	if r.RemoveItemFn != nil {
-		return r.RemoveItemFn(ctx, userID, watchlistID, symbol)
-	}
-	return nil
-}
-
-func (r *WatchlistRepo) EnsureStock(ctx context.Context, symbol, name string) (*models.Stock, error) {
-	if r.EnsureStockFn != nil {
-		return r.EnsureStockFn(ctx, symbol, name)
-	}
-	return &models.Stock{ID: 1, Symbol: symbol, Name: name}, nil
-}
-
-// ---------------------------------------------------------------------------
 // PortfolioRepository
 // ---------------------------------------------------------------------------
 

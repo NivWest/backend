@@ -72,7 +72,7 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	orderHandler := handlers.NewOrderHandler(orderService, authRepo)
 
 	watchlistRepo := repository.NewWatchlistRepository(db)
-	watchlistService := services.NewWatchlistService(watchlistRepo)
+	watchlistService := services.NewWatchlistService(watchlistRepo, provider)
 	watchlistHandler := handlers.NewWatchlistHandler(watchlistService, authRepo)
 
 	// The guest purger runs until closeApp cancels its context: once now, then every GuestPurgeInterval.

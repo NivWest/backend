@@ -27,7 +27,7 @@ components:
         code:
           type: string
           description: Stable UPPER_SNAKE code.
-          examples: [UNAUTHENTICATED, FORBIDDEN, RATE_LIMITED, VALIDATION_ERROR, USER_NOT_FOUND, INSTRUMENT_NOT_FOUND, MARKET_DATA_UNAVAILABLE, INSUFFICIENT_FUNDS, INSUFFICIENT_SHARES, CONFLICT, INTERNAL_ERROR]
+          examples: [UNAUTHENTICATED, FORBIDDEN, RATE_LIMITED, VALIDATION_ERROR, USER_NOT_FOUND, INSTRUMENT_NOT_FOUND, MARKET_DATA_UNAVAILABLE, INSUFFICIENT_FUNDS, INSUFFICIENT_SHARES, CONFLICT, WATCHLIST_NOT_FOUND, WATCHLIST_ITEM_NOT_FOUND, WATCHLIST_LIMIT_REACHED, INTERNAL_ERROR]
 
     Role:
       type: string
@@ -306,6 +306,87 @@ components:
           format: date-time
           description: Set when status is FILLED.
 
+    WatchlistNameRequest:
+      type: object
+      description: Body of POST /watchlists and PATCH /watchlists/{id}. The name is trimmed and must then be 1–50 characters.
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 50
+          examples: [Energy]
+
+    WatchlistItemRequest:
+      type: object
+      required: [orderbook_id]
+      properties:
+        orderbook_id:
+          type: string
+          minLength: 1
+          description: Market data orderbook id; trimmed.
+          examples: [SIM-NVE]
+
+    WatchlistItem:
+      type: object
+      description: |
+        One instrument on a list, with its current quote. `last_price` and `change_percent` come from the live quote
+        (fetched concurrently for every item) and are null when the quote is unavailable.
+      required: [orderbook_id, symbol, name, last_price, change_percent, added_at]
+      properties:
+        orderbook_id:
+          type: string
+          examples: [SIM-NVE]
+        symbol:
+          type: string
+          examples: [NVE]
+        name:
+          type: string
+          examples: [Nordvik Energy]
+        last_price:
+          type: [number, "null"]
+          description: Last price in the instrument's currency, 2 decimals.
+          examples: [100.00]
+        change_percent:
+          type: [number, "null"]
+          description: Day change in percent, 2 decimals.
+          examples: [-0.42]
+        added_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC.
+
+    Watchlist:
+      type: object
+      description: A named list owned by the signed-in user. Items are in the order they were added (oldest first).
+      required: [id, name, items, created_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+          examples: [Energy]
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/WatchlistItem" }
+        created_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC.
+
+    WatchlistListResponse:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          description: The user's lists, at most 10, oldest first. Empty array when there are none.
+          items: { $ref: "#/components/schemas/Watchlist" }
+        next_cursor:
+          type: [string, "null"]
+          description: Always null; a user has at most 10 lists, so the list is not paginated.
+
     OrderPage:
       type: object
       description: One page of the signed-in user's orders, newest first (created_at desc, then id desc).
@@ -407,6 +488,19 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
           example: { error: too many requests, please try again later, code: RATE_LIMITED }
 
+    WatchlistNotFound:
+      description: No list with this id belongs to the signed-in user (another user's list is reported the same way).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: watchlist not found, code: WATCHLIST_NOT_FOUND }
+    WatchlistValidationError:
+      description: Malformed JSON, a non-numeric list id, or a name that is blank or longer than 50 characters after trimming.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: name must be at most 50 characters, code: VALIDATION_ERROR }
+
   parameters:
     OrderbookID:
       name: orderbook_id
@@ -415,6 +509,11 @@ components:
       schema: { type: string, minLength: 1 }
       examples:
         simulated: { value: SIM-FJRD }
+    WatchlistID:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
 
 paths:
   /health:
@@ -798,6 +897,185 @@ paths:
                 shares: { value: { error: not enough shares to sell, code: INSUFFICIENT_SHARES } }
         "502":
           $ref: "#/components/responses/MarketDataUnavailable"
+
+  # Watchlists (story NW-06). Every route needs a session and only sees the caller's own lists:
+  # another user's list id is 404 WATCHLIST_NOT_FOUND, never 403. Items are keyed by orderbook_id.
+  /watchlists:
+    get:
+      summary: The signed-in user's watchlists with live prices
+      operationId: listWatchlists
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WatchlistListResponse" }
+              example:
+                items:
+                  - id: 7
+                    name: Energy
+                    created_at: "2026-11-08T09:41:00Z"
+                    items:
+                      - { orderbook_id: SIM-NVE, symbol: NVE, name: Nordvik Energy, last_price: 100.00, change_percent: -0.42, added_at: "2026-11-08T09:41:05Z" }
+                next_cursor: null
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+    post:
+      summary: Create a watchlist
+      description: A user has at most 10 lists; the 11th is 422 WATCHLIST_LIMIT_REACHED. Names need not be unique.
+      operationId: createWatchlist
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WatchlistNameRequest" }
+            example: { name: Energy }
+      responses:
+        "201":
+          description: Created, with no items.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Watchlist" }
+              example: { id: 7, name: Energy, items: [], created_at: "2026-11-08T09:41:00Z" }
+        "400":
+          $ref: "#/components/responses/WatchlistValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "422":
+          description: The user already has 10 lists.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: you can have at most 10 watchlists, code: WATCHLIST_LIMIT_REACHED }
+
+  /watchlists/{id}:
+    parameters:
+      - $ref: "#/components/parameters/WatchlistID"
+    get:
+      summary: One watchlist with live prices
+      operationId: getWatchlist
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Watchlist" }
+        "400":
+          $ref: "#/components/responses/WatchlistValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/WatchlistNotFound"
+    patch:
+      summary: Rename a watchlist
+      operationId: renameWatchlist
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WatchlistNameRequest" }
+            example: { name: Renewables }
+      responses:
+        "200":
+          description: Renamed; the full list with live prices.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Watchlist" }
+        "400":
+          $ref: "#/components/responses/WatchlistValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/WatchlistNotFound"
+    delete:
+      summary: Delete a watchlist and its items
+      operationId: deleteWatchlist
+      security: [{ sessionCookie: [] }]
+      responses:
+        "204":
+          description: Deleted.
+        "400":
+          $ref: "#/components/responses/WatchlistValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/WatchlistNotFound"
+
+  /watchlists/{id}/items:
+    parameters:
+      - $ref: "#/components/parameters/WatchlistID"
+    post:
+      summary: Add an instrument to a watchlist
+      description: |
+        The list's ownership is checked first (404 WATCHLIST_NOT_FOUND), then the instrument (404 INSTRUMENT_NOT_FOUND),
+        then uniqueness: an instrument is on a list at most once (409 CONFLICT).
+      operationId: addWatchlistItem
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WatchlistItemRequest" }
+            example: { orderbook_id: SIM-NVE }
+      responses:
+        "201":
+          description: Added; the new item with its current price.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WatchlistItem" }
+              example: { orderbook_id: SIM-NVE, symbol: NVE, name: Nordvik Energy, last_price: 100.00, change_percent: -0.42, added_at: "2026-11-08T09:41:05Z" }
+        "400":
+          description: Malformed JSON, a non-numeric list id or a blank orderbook_id.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: orderbook_id is required, code: VALIDATION_ERROR }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          description: The list is not the user's (WATCHLIST_NOT_FOUND) or the instrument is unknown (INSTRUMENT_NOT_FOUND).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                watchlist: { value: { error: watchlist not found, code: WATCHLIST_NOT_FOUND } }
+                instrument: { value: { error: instrument not found, code: INSTRUMENT_NOT_FOUND } }
+        "409":
+          description: The instrument is already on this list.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: instrument is already on this watchlist, code: CONFLICT }
+        "502":
+          $ref: "#/components/responses/MarketDataUnavailable"
+
+  /watchlists/{id}/items/{orderbook_id}:
+    parameters:
+      - $ref: "#/components/parameters/WatchlistID"
+      - $ref: "#/components/parameters/OrderbookID"
+    delete:
+      summary: Remove an instrument from a watchlist
+      operationId: removeWatchlistItem
+      security: [{ sessionCookie: [] }]
+      responses:
+        "204":
+          description: Removed.
+        "400":
+          $ref: "#/components/responses/WatchlistValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          description: The list is not the user's (WATCHLIST_NOT_FOUND) or the instrument is not on it (WATCHLIST_ITEM_NOT_FOUND).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                watchlist: { value: { error: watchlist not found, code: WATCHLIST_NOT_FOUND } }
+                item: { value: { error: instrument is not on this watchlist, code: WATCHLIST_ITEM_NOT_FOUND } }
 
   /portfolio:
     get:
