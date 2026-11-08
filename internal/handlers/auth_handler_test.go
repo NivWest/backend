@@ -235,3 +235,28 @@ func TestAuthHandler_LogsNoSecrets(t *testing.T) {
 		t.Errorf("log output should identify the user by id:\n%s", out)
 	}
 }
+
+// The callback's state check runs before Google is contacted, so it needs no OAuth fake (story NW-07:
+// these errors carry a code like every other error body).
+func TestAuthHandler_CallbackRejectsInvalidState(t *testing.T) {
+	tests := []struct {
+		name   string
+		cookie string
+	}{
+		{name: "no oauth_state cookie"},
+		{name: "cookie does not match the state", cookie: "other-state"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newAuthFixture(authConfig(false, 10))
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/callback?state=the-state&code=c", nil)
+			if tt.cookie != "" {
+				req.AddCookie(&http.Cookie{Name: oauthStateCookie, Value: tt.cookie})
+			}
+			w := httptest.NewRecorder()
+			f.engine.ServeHTTP(w, req)
+			expectStatus(t, w, http.StatusBadRequest)
+			expectErrorCode(t, w, domain.CodeValidation)
+		})
+	}
+}
