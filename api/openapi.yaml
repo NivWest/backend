@@ -1808,6 +1808,7 @@ paths:
       description: Returns summaries and tags of all knowledge base articles. Public and unauthenticated.
       operationId: listArticles
       tags: [Learn]
+      security: []
       responses:
         "200":
           description: List of articles.
@@ -1827,6 +1828,7 @@ paths:
       description: Returns the full article including markdown body and update timestamp.
       operationId: getArticle
       tags: [Learn]
+      security: []
       parameters:
         - $ref: "#/components/parameters/ArticleSlug"
       responses:
@@ -1844,6 +1846,7 @@ paths:
       description: Performs full-text search across article chunks with ranking and headline snippets.
       operationId: searchArticles
       tags: [Learn]
+      security: []
       parameters:
         - name: q
           in: query
