@@ -134,3 +134,25 @@ type EquitySnapshot struct {
 	VaultValue    decimal.Decimal `gorm:"type:numeric(18,2);not null;default:0" json:"vault_value"`
 	Equity        decimal.Decimal `gorm:"type:numeric(18,2);not null" json:"equity"`
 }
+
+// VaultAccount holds the user's idle cash parked in The Vault (story NW-11), earning risk-free daily APY.
+// user_id is unique so each user has at most one vault account.
+type VaultAccount struct {
+	ID                  uint            `gorm:"primaryKey" json:"id"`
+	UserID              uint            `gorm:"uniqueIndex;not null;constraint:OnDelete:CASCADE;" json:"user_id"`
+	Balance             decimal.Decimal `gorm:"type:numeric(18,2);not null;default:0" json:"balance"`
+	InterestEarnedTotal decimal.Decimal `gorm:"type:numeric(18,2);not null;default:0" json:"interest_earned_total"`
+	LastAccruedAt       time.Time       `gorm:"not null" json:"last_accrued_at"`
+	CreatedAt           time.Time       `json:"created_at"`
+	UpdatedAt           time.Time       `json:"updated_at"`
+}
+
+// VaultTransaction records a deposit or withdrawal in the vault (story NW-11).
+// Type is "DEPOSIT" or "WITHDRAWAL".
+type VaultTransaction struct {
+	ID        uint            `gorm:"primaryKey;index:idx_vault_tx_user_created,priority:3" json:"id"`
+	UserID    uint            `gorm:"not null;index:idx_vault_tx_user_created,priority:1;constraint:OnDelete:CASCADE;" json:"user_id"`
+	Type      string          `gorm:"type:varchar(20);not null" json:"type"`
+	Amount    decimal.Decimal `gorm:"type:numeric(18,2);not null" json:"amount"`
+	CreatedAt time.Time       `gorm:"index:idx_vault_tx_user_created,priority:2" json:"created_at"`
+}

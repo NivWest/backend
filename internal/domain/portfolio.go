@@ -50,6 +50,7 @@ type PortfolioPosition struct {
 type Portfolio struct {
 	Cash          float64             `json:"cash"`
 	HoldingsValue float64             `json:"holdings_value"`
+	VaultValue    float64             `json:"vault_value"`
 	TotalEquity   float64             `json:"total_equity"`
 	UnrealizedPnL float64             `json:"unrealized_pnl"`
 	RealizedPnL   float64             `json:"realized_pnl"`
