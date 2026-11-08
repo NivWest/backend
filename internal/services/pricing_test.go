@@ -73,3 +73,37 @@ func TestPriceOrder(t *testing.T) {
 		})
 	}
 }
+
+func TestReservationFor(t *testing.T) {
+	p := func(s string) *decimal.Decimal { d := dec(s); return &d }
+	tests := []struct {
+		name         string
+		side         domain.OrderSide
+		orderType    domain.OrderType
+		qty          string
+		limit, stop  *decimal.Decimal
+		wantReserved string
+	}{
+		// AC1: 10 × 95 = 950.00; commission 0.25% = 2.375 → 2.38; 952.38.
+		{name: "AC1 buy limit 10 @ 95", side: domain.OrderSideBuy, orderType: domain.OrderTypeLimit, qty: "10", limit: p("95"), wantReserved: "952.38"},
+		// 90 × 1.05 = 94.50; 10 × 94.50 = 945.00; commission 2.3625 → 2.36; 947.36.
+		{name: "buy stop 10 @ 90 reserves at stop × 1.05", side: domain.OrderSideBuy, orderType: domain.OrderTypeStop, qty: "10", stop: p("90"), wantReserved: "947.36"},
+		// 33.33 × 1.05 = 34.9965 → 35.00 before multiplying; gross 35.00; commission max(1, 0.0875) = 1.00.
+		{name: "buy stop rounds the buffered price first", side: domain.OrderSideBuy, orderType: domain.OrderTypeStop, qty: "1", stop: p("33.33"), wantReserved: "36.00"},
+		{name: "minimum commission", side: domain.OrderSideBuy, orderType: domain.OrderTypeLimit, qty: "1", limit: p("10"), wantReserved: "11.00"},
+		{name: "fractional quantity", side: domain.OrderSideBuy, orderType: domain.OrderTypeLimit, qty: "0.3333", limit: p("100.10"), wantReserved: "34.36"},
+		{name: "no slippage in the reservation", side: domain.OrderSideBuy, orderType: domain.OrderTypeLimit, qty: "200", limit: p("95"), wantReserved: "19047.50"},
+		{name: "sell limit reserves shares, not cash", side: domain.OrderSideSell, orderType: domain.OrderTypeLimit, qty: "10", limit: p("105"), wantReserved: "0"},
+		{name: "sell stop reserves shares, not cash", side: domain.OrderSideSell, orderType: domain.OrderTypeStop, qty: "10", stop: p("90"), wantReserved: "0"},
+		{name: "market order reserves nothing", side: domain.OrderSideBuy, orderType: domain.OrderTypeMarket, qty: "10", wantReserved: "0"},
+		{name: "limit without a price", side: domain.OrderSideBuy, orderType: domain.OrderTypeLimit, qty: "10", wantReserved: "0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ReservationFor(tt.side, tt.orderType, dec(tt.qty), tt.limit, tt.stop)
+			if !got.Equal(dec(tt.wantReserved)) {
+				t.Errorf("ReservationFor() = %s, want %s", got, tt.wantReserved)
+			}
+		})
+	}
+}

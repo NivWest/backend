@@ -81,6 +81,23 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	orderService.SetFillObserver(snapshotService)
 	orderHandler := handlers.NewOrderHandler(orderService, authRepo)
 
+	// The matching engine (story NW-08) fills LIMIT and STOP orders. Every replica runs the loop, but only the
+	// holder of the Postgres advisory lock runs cycles; the others retry every interval. It stops (and releases
+	// the lock) when closeApp cancels its context.
+	leaderLock, err := repository.NewAdvisoryLock(db, domain.MatchingEngineLockKey)
+	if err != nil {
+		cancelWarm()
+		return nil, nil, err
+	}
+	engine := services.NewMatchingEngine(repository.NewMatchingRepository(db), provider, leaderLock, time.Now, services.DefaultMatchingWorkers)
+	matchCtx, cancelMatch := context.WithCancel(context.Background())
+	matchDone := make(chan struct{})
+	go func() {
+		defer close(matchDone)
+		engine.Run(matchCtx, cfg.Matching.Interval)
+	}()
+	log.Printf("matching engine: every %s (leader election via pg_try_advisory_lock)", cfg.Matching.Interval)
+
 	watchlistRepo := repository.NewWatchlistRepository(db)
 	watchlistService := services.NewWatchlistService(watchlistRepo, provider)
 	watchlistHandler := handlers.NewWatchlistHandler(watchlistService, authRepo)
@@ -96,6 +113,8 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	log.Printf("equity snapshots every %s, risk-free rate %.4f", cfg.Analytics.SnapshotInterval, cfg.Analytics.RiskFreeRate)
 
 	closeApp := func() error {
+		cancelMatch()
+		<-matchDone // the engine releases its lock connection before the pool closes
 		cancelSnapshots()
 		cancelPurge()
 		cancelWarm()

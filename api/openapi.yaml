@@ -28,7 +28,7 @@ tags:
   - name: Simulated market (dev/test)
     description: Price pinning for the simulated market. Mounted only with MARKET_SIM_CONTROL_ENABLED=true; never in production.
   - name: Orders
-    description: Market order execution (NW-04) and order history (NW-05).
+    description: Market orders (NW-04), order history (NW-05), and good-till-cancelled limit and stop orders filled by a background matching engine (NW-08).
   - name: Watchlists
     description: Up to 10 named watchlists per user with live prices (story NW-06).
   - name: Portfolio
@@ -63,6 +63,8 @@ components:
         - WATCHLIST_NOT_FOUND
         - WATCHLIST_ITEM_NOT_FOUND
         - WATCHLIST_LIMIT_REACHED
+        - ORDER_NOT_FOUND
+        - ORDER_NOT_OPEN
 
     Error:
       type: object
@@ -278,13 +280,17 @@ components:
 
     OrderType:
       type: string
-      enum: [MARKET]
-      description: Only market orders until NW-08.
+      enum: [MARKET, LIMIT, STOP]
+      description: |
+        MARKET executes immediately. LIMIT and STOP are good-till-cancelled pending orders (story NW-08): they start
+        OPEN and the matching engine fills them once the quote reaches their price (see OrderRequest).
 
     OrderStatus:
       type: string
       enum: [OPEN, FILLED, CANCELLED, REJECTED]
-      description: Market orders are always FILLED; the other states are reserved for pending orders (NW-08).
+      description: |
+        Market orders are always FILLED. A LIMIT or STOP order starts OPEN and moves exactly once, to FILLED (the
+        matching engine), CANCELLED (DELETE /orders/{id}) or REJECTED (not enough buying power at fill time).
 
     OrderRequest:
       type: object
@@ -304,18 +310,47 @@ components:
         type:
           $ref: "#/components/schemas/OrderType"
           description: Defaults to MARKET.
+        limit_price:
+          type: number
+          exclusiveMinimum: 0
+          description: Required for (and only allowed on) LIMIT orders. SEK, at most 2 decimals.
+          examples: [95]
+        stop_price:
+          type: number
+          exclusiveMinimum: 0
+          description: Required for (and only allowed on) STOP orders. SEK, at most 2 decimals.
+          examples: [90]
+      description: |
+        A market order executes at once. LIMIT and STOP orders are good-till-cancelled and start OPEN.
+
+        Reservations at placement (money rounded half-up to 2 decimals; commission = max(1.00, 0.25% × gross)):
+        - BUY LIMIT reserves quantity × limit_price + commission(quantity × limit_price);
+        - BUY STOP reserves the same with round2(stop_price × 1.05) in place of limit_price;
+        - SELL orders reserve the shares.
+        buying_power = cash − reserved_cash and available shares = quantity − reserved_quantity; every order,
+        market orders included, must fit them (422 INSUFFICIENT_FUNDS / INSUFFICIENT_SHARES otherwise).
+
+        The matching engine checks open orders about once a second and fills them with the market pricing rules
+        (see Order) when:
+        - BUY LIMIT: ask ≤ limit_price (fills at the ask);
+        - SELL LIMIT: bid ≥ limit_price (fills at the bid);
+        - SELL STOP: bid ≤ stop_price (fills at the bid);
+        - BUY STOP: ask ≥ stop_price (fills at the ask).
+        When the cash outside other reservations no longer covers the total at fill time, the order is REJECTED
+        with a reject_reason and its reservation is released.
 
     Order:
       type: object
       description: |
-        An executed order. Pricing (all money in SEK, rounded half-up to 2 decimals):
+        An order and, once FILLED, its fill. Pricing (all money in SEK, rounded half-up to 2 decimals):
         - base price = ask for BUY, bid for SELL;
         - quantity > 100 applies 0.5% slippage against the trader (BUY × 1.005, SELL × 0.995);
         - fill_price = base price (after slippage) rounded to 2 decimals, before anything else;
         - gross = fill_price × quantity; commission = max(1.00, 0.25% × gross);
         - total = gross + commission (BUY, debited) or gross − commission (SELL, credited).
-        Execution waits a simulated 50–500 ms before the price is read.
-      required: [id, orderbook_id, symbol, name, side, type, status, quantity, fill_price, commission, total, created_at, filled_at]
+        A market order waits a simulated 50–500 ms before the price is read. fill_price, commission and total are
+        null unless status is FILLED.
+      required: [id, orderbook_id, symbol, name, side, type, status, quantity, limit_price, stop_price, fill_price, commission, total, reject_reason, created_at, filled_at]
       properties:
         id:
           type: integer
@@ -335,15 +370,24 @@ components:
         quantity:
           type: number
           description: Up to 4 decimals.
+        limit_price:
+          type: [number, "null"]
+          description: The LIMIT order's price in SEK (2 decimals); null for other types.
+        stop_price:
+          type: [number, "null"]
+          description: The STOP order's trigger price in SEK (2 decimals); null for other types.
         fill_price:
-          type: number
-          description: Price per share in SEK, 2 decimals.
+          type: [number, "null"]
+          description: Price per share in SEK, 2 decimals. null unless FILLED.
         commission:
-          type: number
-          description: SEK, 2 decimals.
+          type: [number, "null"]
+          description: SEK, 2 decimals. null unless FILLED.
         total:
-          type: number
-          description: Cash debited (BUY) or credited (SELL) in SEK, 2 decimals.
+          type: [number, "null"]
+          description: Cash debited (BUY) or credited (SELL) in SEK, 2 decimals. null unless FILLED.
+        reject_reason:
+          type: [string, "null"]
+          description: Why the matching engine rejected the order; null unless REJECTED.
         created_at:
           type: string
           format: date-time
@@ -458,7 +502,7 @@ components:
         - market_value = last_price × quantity; unrealized_pnl = market_value − avg_cost × quantity;
         - unrealized_pnl_percent = unrealized_pnl / (avg_cost × quantity) × 100;
         - weight = market_value / holdings_value × 100 (0 when holdings_value is 0).
-      required: [orderbook_id, symbol, name, quantity, avg_cost, last_price, market_value, unrealized_pnl, unrealized_pnl_percent, day_change_percent, weight]
+      required: [orderbook_id, symbol, name, quantity, avg_cost, last_price, market_value, unrealized_pnl, unrealized_pnl_percent, day_change_percent, weight, reserved_quantity]
       properties:
         orderbook_id: { type: string }
         symbol: { type: string }
@@ -487,6 +531,9 @@ components:
         weight:
           type: number
           description: Percent of holdings_value, 2 decimals.
+        reserved_quantity:
+          type: number
+          description: Shares held back by OPEN SELL orders (up to 4 decimals); quantity − reserved_quantity can be sold.
 
     Portfolio:
       type: object
@@ -494,13 +541,16 @@ components:
         The signed-in user's portfolio. Money in SEK, 2 decimals.
         - holdings_value = Σ positions.market_value; total_equity = cash + holdings_value;
         - unrealized_pnl = Σ positions.unrealized_pnl;
-        - realized_pnl accumulates over every SELL: sell total (net proceeds) − avg_cost × quantity sold.
+        - realized_pnl accumulates over every SELL: sell total (net proceeds) − avg_cost × quantity sold;
+        - reserved_cash = Σ reservations of OPEN BUY orders (still part of cash); buying_power = cash − reserved_cash.
         positions are sorted by market_value desc (largest holding first), then orderbook_id asc.
         top_movers is at most 5 positions sorted by day_change_percent desc, then orderbook_id asc.
         Both arrays are empty (never null) without positions.
-      required: [cash, holdings_value, total_equity, unrealized_pnl, realized_pnl, positions, top_movers]
+      required: [cash, reserved_cash, buying_power, holdings_value, total_equity, unrealized_pnl, realized_pnl, positions, top_movers]
       properties:
         cash: { type: number }
+        reserved_cash: { type: number }
+        buying_power: { type: number }
         holdings_value: { type: number }
         total_equity: { type: number }
         unrealized_pnl: { type: number }
@@ -656,7 +706,25 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
           example: { error: "name must be at most 50 characters", code: VALIDATION_ERROR }
 
+    OrderNotFound:
+      description: No order with this id belongs to the signed-in user (another user's order is reported the same way).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: "order not found", code: ORDER_NOT_FOUND }
+    OrderIDValidationError:
+      description: The order id is not a positive integer.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: "order id must be a positive integer", code: VALIDATION_ERROR }
+
   parameters:
+    OrderID:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
     OrderbookID:
       name: orderbook_id
       in: path
@@ -994,7 +1062,17 @@ paths:
           in: query
           required: false
           schema: { type: string, minLength: 1 }
-          description: next_cursor of the previous page.
+          description: next_cursor of the previous page. Send the same status filter on every page.
+        - name: status
+          in: query
+          required: false
+          style: form
+          explode: false
+          schema:
+            type: array
+            minItems: 1
+            items: { $ref: "#/components/schemas/OrderStatus" }
+          description: Only orders in one of these statuses, comma-separated (e.g. `OPEN`, or `FILLED,CANCELLED,REJECTED`).
       responses:
         "200":
           description: One page of orders.
@@ -1011,14 +1089,17 @@ paths:
                     type: MARKET
                     status: FILLED
                     quantity: 5
+                    limit_price: null
+                    stop_price: null
                     fill_price: 109.89
                     commission: 1.37
                     total: 548.08
+                    reject_reason: null
                     created_at: "2026-10-26T09:42:00Z"
                     filled_at: "2026-10-26T09:42:00Z"
                 next_cursor: eyJjIjoiMjAyNi0xMC0yNlQwOTo0MjowMFoiLCJpIjo0M30
         "400":
-          description: limit is not an integer from 1 to 100, or cursor is malformed.
+          description: limit is not an integer from 1 to 100, cursor is malformed, or status is not a list of OrderStatus values.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -1026,11 +1107,14 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthenticated"
     post:
-      summary: Place a market order and execute it
+      summary: Place an order
       description: |
-        Validates the request, prices it from the live quote (see the Order schema) and, in one DB transaction,
-        locks the user row, checks cash or shares, moves the cash, updates the position and stores the order.
-        Concurrent orders by the same user are serialized, so cash never goes negative.
+        A MARKET order is priced from the live quote (see the Order schema) and, in one DB transaction, the user row
+        is locked, buying power or available shares are checked, the cash moves, the position is updated and the
+        order is stored FILLED (201). Concurrent orders by the same user are serialized, so cash never goes negative.
+
+        A LIMIT or STOP order is stored OPEN (201) after its reservation (see OrderRequest) is checked against buying
+        power or available shares and booked in the same kind of transaction; the matching engine fills it later.
 
         With an `Idempotency-Key` header, a retry with the same key and the same body returns the original order
         (200, identical body) and executes nothing; the same key with a different body is 409 CONFLICT.
@@ -1051,10 +1135,13 @@ paths:
         content:
           application/json:
             schema: { $ref: "#/components/schemas/OrderRequest" }
-            example: { orderbook_id: SIM-FJRD, side: BUY, quantity: 10 }
+            examples:
+              market: { value: { orderbook_id: SIM-FJRD, side: BUY, quantity: 10 } }
+              limit: { value: { orderbook_id: SIM-KALL, side: BUY, type: LIMIT, quantity: 10, limit_price: 95 } }
+              stop: { value: { orderbook_id: SIM-KALL, side: SELL, type: STOP, quantity: 10, stop_price: 90 } }
       responses:
         "201":
-          description: Executed.
+          description: Executed (MARKET, status FILLED) or accepted (LIMIT/STOP, status OPEN).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Order" }
@@ -1067,9 +1154,12 @@ paths:
                 type: MARKET
                 status: FILLED
                 quantity: 10
+                limit_price: null
+                stop_price: null
                 fill_price: 100.10
                 commission: 2.50
                 total: 1003.50
+                reject_reason: null
                 created_at: "2026-10-25T09:41:00Z"
                 filled_at: "2026-10-25T09:41:00Z"
         "200":
@@ -1079,8 +1169,9 @@ paths:
               schema: { $ref: "#/components/schemas/Order" }
         "400":
           description: |
-            Malformed JSON, blank orderbook_id, side not BUY/SELL, quantity <= 0 or with more than 4 decimals,
-            type other than MARKET, or an invalid Idempotency-Key.
+            Malformed JSON, blank orderbook_id, side not BUY/SELL, quantity <= 0 or with more than 4 decimals, an
+            unknown type, a missing, non-positive or over-precise (more than 2 decimals) limit_price on LIMIT or
+            stop_price on STOP, a price on a type that takes none, or an invalid Idempotency-Key.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -1096,7 +1187,7 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
               example: { error: "idempotency key already used for a different order", code: CONFLICT }
         "422":
-          description: Business rule; nothing was executed.
+          description: Business rule (buying power or available shares); nothing was executed or reserved.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -1105,6 +1196,72 @@ paths:
                 shares: { value: { error: "not enough shares to sell", code: INSUFFICIENT_SHARES } }
         "502":
           $ref: "#/components/responses/MarketDataUnavailable"
+
+  /orders/{id}:
+    parameters:
+      - $ref: "#/components/parameters/OrderID"
+    get:
+      summary: One of the signed-in user's orders
+      description: Use it to poll an OPEN order until the matching engine fills or rejects it.
+      operationId: getOrder
+      tags: [Orders]
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: The order.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+              example:
+                id: 51
+                orderbook_id: SIM-KALL
+                symbol: KALL
+                name: Kallsten Bank
+                side: BUY
+                type: LIMIT
+                status: FILLED
+                quantity: 10
+                limit_price: 95.00
+                stop_price: null
+                fill_price: 94.89
+                commission: 2.37
+                total: 951.27
+                reject_reason: null
+                created_at: "2026-11-08T09:41:00Z"
+                filled_at: "2026-11-08T09:41:03Z"
+        "400":
+          $ref: "#/components/responses/OrderIDValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/OrderNotFound"
+    delete:
+      summary: Cancel an OPEN order
+      description: |
+        In one transaction (user, position and order rows locked, in that order) the order moves from OPEN to
+        CANCELLED and its reservation is released. A fill and a cancel racing for the same order serialize on these
+        locks: whichever commits first wins, and the other sees the order is no longer OPEN.
+      operationId: cancelOrder
+      tags: [Orders]
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: Cancelled; the order with status CANCELLED.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "400":
+          $ref: "#/components/responses/OrderIDValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/OrderNotFound"
+        "409":
+          description: The order is not OPEN any more (already filled, cancelled or rejected).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "order is not open", code: ORDER_NOT_OPEN }
 
   # Watchlists (story NW-06). Every route needs a session and only sees the caller's own lists:
   # another user's list id is 404 WATCHLIST_NOT_FOUND, never 403. Items are keyed by orderbook_id.
@@ -1309,6 +1466,8 @@ paths:
               schema: { $ref: "#/components/schemas/Portfolio" }
               example:
                 cash: 98996.50
+                reserved_cash: 0
+                buying_power: 98996.50
                 holdings_value: 1100.00
                 total_equity: 100096.50
                 unrealized_pnl: 96.50
@@ -1325,6 +1484,7 @@ paths:
                     unrealized_pnl_percent: 9.62
                     day_change_percent: 1.25
                     weight: 100
+                    reserved_quantity: 0
                 top_movers:
                   - orderbook_id: SIM-NVE
                     symbol: NVE
@@ -1337,6 +1497,7 @@ paths:
                     unrealized_pnl_percent: 9.62
                     day_change_percent: 1.25
                     weight: 100
+                    reserved_quantity: 0
         "401":
           $ref: "#/components/responses/Unauthenticated"
 
