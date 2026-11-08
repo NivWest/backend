@@ -76,6 +76,7 @@ func fullApp() *app.App {
 	auth := testutil.NewAuthRepo()
 	provider := &testutil.MarketProvider{}
 	gateway := services.NewAIGateway(fake.New(), testutil.NewAIUsageRepo(), 0, time.Second, nil, nil)
+	knowledge := testutil.NewKnowledgeFake()
 	return &app.App{
 		HealthHandler:    handlers.NewHealthHandler(domain.Features{GuestAuth: true, SimControl: true}, config.MarketProviderSimulated, config.LLMProviderFake),
 		OpenAPIHandler:   handlers.NewOpenAPIHandler(api.OpenAPISpec),
@@ -89,8 +90,9 @@ func fullApp() *app.App {
 			services.NewPortfolioService(&testutil.PortfolioRepo{}, provider, users), 0.02, nil), auth),
 		SimHandler: handlers.NewSimHandler(&testutil.SimControl{}),
 		AIHandler: handlers.NewAIHandler(
-			services.NewAIBriefService(gateway, provider, testutil.NewAIBriefRepo(), nil), gateway, auth),
-		AuthRepo: auth,
+			services.NewAIBriefService(gateway, provider, testutil.NewAIBriefRepo(), nil), gateway, services.NewAskService(gateway, knowledge), auth),
+		LearnHandler: handlers.NewLearnHandler(services.NewKnowledgeService(knowledge)),
+		AuthRepo:     auth,
 	}
 }
 

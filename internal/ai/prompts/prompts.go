@@ -24,6 +24,7 @@ var files embed.FS
 // Prompt versions, "<feature>.v<N>"; each one names the file <version>.tmpl.
 const (
 	InstrumentBriefVersion = "instrument_brief.v1"
+	KnowledgeAskVersion    = "knowledge_ask.v1"
 )
 
 // InstrumentDataTag delimits the instrument data in the instrument brief prompt.
@@ -74,6 +75,11 @@ func InstrumentBrief(d InstrumentData) (Prompt, error) {
 		return Prompt{}, fmt.Errorf("encode instrument data: %w", err)
 	}
 	return render(InstrumentBriefVersion, map[string]string{"InstrumentJSON": string(raw)})
+}
+
+// KnowledgeAsk renders knowledge_ask.v1 for the user's question.
+func KnowledgeAsk(question string) (Prompt, error) {
+	return render(KnowledgeAskVersion, map[string]string{"Question": question})
 }
 
 func render(version string, data any) (Prompt, error) {
