@@ -152,3 +152,35 @@ func TestLoad_InvalidMarketProviderErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestLoad_MarketStream(t *testing.T) {
+	tests := []struct {
+		name                string
+		interval, heartbeat string
+		maxPerIP            string
+		wantInterval        time.Duration
+		wantHeartbeat       time.Duration
+		wantMax             int
+	}{
+		{name: "defaults", wantInterval: 2 * time.Second, wantHeartbeat: 10 * time.Second, wantMax: 5},
+		{name: "overrides", interval: "1s", heartbeat: "5s", maxPerIP: "3", wantInterval: time.Second, wantHeartbeat: 5 * time.Second, wantMax: 3},
+		{name: "non-positive falls back", interval: "0s", heartbeat: "-1s", maxPerIP: "0", wantInterval: 2 * time.Second, wantHeartbeat: 10 * time.Second, wantMax: 5},
+		{name: "invalid falls back", interval: "fast", heartbeat: "x", maxPerIP: "many", wantInterval: 2 * time.Second, wantHeartbeat: 10 * time.Second, wantMax: 5},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("MARKET_STREAM_INTERVAL", tt.interval)
+			t.Setenv("MARKET_STREAM_HEARTBEAT", tt.heartbeat)
+			t.Setenv("MARKET_STREAM_MAX_PER_IP", tt.maxPerIP)
+			cfg, err := Load("")
+			if err != nil {
+				t.Fatal(err)
+			}
+			m := cfg.Market
+			if m.StreamInterval != tt.wantInterval || m.StreamHeartbeat != tt.wantHeartbeat || m.StreamMaxPerIP != tt.wantMax {
+				t.Errorf("stream config = %s %s %d, want %s %s %d", m.StreamInterval, m.StreamHeartbeat, m.StreamMaxPerIP,
+					tt.wantInterval, tt.wantHeartbeat, tt.wantMax)
+			}
+		})
+	}
+}
