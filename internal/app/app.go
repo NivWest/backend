@@ -29,6 +29,7 @@ type App struct {
 	PortfolioHandler    *handlers.PortfolioHandler
 	OrderHandler        *handlers.OrderHandler
 	WatchlistHandler    *handlers.WatchlistHandler
+	AnalyticsHandler    *handlers.AnalyticsHandler
 	AuthRepo            domain.AuthRepository
 
 	// QuoteHub fans live quotes out to the streams. Close it on shutdown (cmd/api registers it with
@@ -85,8 +86,15 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	portfolioService := services.NewPortfolioService(portfolioRepo, provider, userRepo)
 	portfolioHandler := handlers.NewPortfolioHandler(portfolioService, authRepo)
 
+	// Equity snapshots (story NW-10): one after every fill, and one per user with an order every SNAPSHOT_INTERVAL.
+	snapshotRepo := repository.NewSnapshotRepository(db)
+	snapshotService := services.NewSnapshotService(snapshotRepo, portfolioRepo, userRepo, provider, time.Now)
+	analyticsService := services.NewAnalyticsService(snapshotRepo, portfolioService, cfg.Analytics.RiskFreeRate, time.Now)
+	analyticsHandler := handlers.NewAnalyticsHandler(analyticsService, authRepo)
+
 	orderRepo := repository.NewOrderRepository(db)
 	orderService := services.NewOrderService(orderRepo, provider)
+	orderService.SetFillObserver(snapshotService)
 	orderHandler := handlers.NewOrderHandler(orderService, authRepo)
 
 	watchlistRepo := repository.NewWatchlistRepository(db)
@@ -99,8 +107,13 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 	purgeCtx, cancelPurge := context.WithCancel(context.Background())
 	go purger.Run(purgeCtx, domain.GuestPurgeInterval)
 
+	snapshotCtx, cancelSnapshots := context.WithCancel(context.Background())
+	go runSnapshotScheduler(snapshotCtx, newTimeTicker(cfg.Analytics.SnapshotInterval), snapshotService)
+	log.Printf("equity snapshots every %s, risk-free rate %.4f", cfg.Analytics.SnapshotInterval, cfg.Analytics.RiskFreeRate)
+
 	closeApp := func() error {
 		quoteHub.Close()
+		cancelSnapshots()
 		cancelPurge()
 		cancelWarm()
 		sqlDB, err := db.DB()
@@ -125,6 +138,7 @@ func NewApp(cfg *config.Config) (*App, func() error, error) {
 		PortfolioHandler:    portfolioHandler,
 		OrderHandler:        orderHandler,
 		WatchlistHandler:    watchlistHandler,
+		AnalyticsHandler:    analyticsHandler,
 		AuthRepo:            authRepo,
 	}, closeApp, nil
 }

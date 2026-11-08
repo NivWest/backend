@@ -32,7 +32,7 @@ tags:
   - name: Watchlists
     description: Up to 10 named watchlists per user with live prices (story NW-06).
   - name: Portfolio
-    description: Cash, positions at live prices, unrealized and realized P&L (story NW-05).
+    description: Cash, positions at live prices, unrealized and realized P&L (story NW-05), equity history and risk analytics (story NW-10).
 
 components:
   securitySchemes:
@@ -511,6 +511,99 @@ components:
         top_movers:
           type: array
           items: { $ref: "#/components/schemas/PortfolioPosition" }
+
+    HistoryRange:
+      type: string
+      enum: ["1d", "1w", "1m", all]
+      description: |
+        Window of GET /portfolio/history, ending now: 1d = the last 24 hours, raw snapshots; 1w = the last 7 days and
+        1m = the last 30 days, bucketed hourly (the last snapshot of each UTC hour); all = every snapshot, bucketed
+        daily (the last snapshot of each UTC day).
+
+    EquityPoint:
+      type: object
+      description: One equity snapshot (cash + holdings at the last price + vault), SEK with 2 decimals.
+      required: [t, equity]
+      properties:
+        t:
+          type: string
+          format: date-time
+          description: When the snapshot was taken (RFC 3339, UTC).
+        equity:
+          type: number
+          description: Total equity in SEK, 2 decimals.
+
+    EquityHistory:
+      type: object
+      description: |
+        The signed-in user's equity over the requested range, oldest first. Snapshots are taken after every fill and
+        every SNAPSHOT_INTERVAL (default 1h) for users with at least one order, so a user without orders has no points.
+      required: [range, points]
+      properties:
+        range: { $ref: "#/components/schemas/HistoryRange" }
+        points:
+          type: array
+          items: { $ref: "#/components/schemas/EquityPoint" }
+          description: Oldest first; empty (never null) when there are no snapshots in the range.
+
+    AllocationSlice:
+      type: object
+      description: |
+        One slice of the allocation: an open position (label = symbol) or the cash (label "Cash", orderbook_id null).
+        weight = value / total_equity × 100.
+      required: [label, orderbook_id, value, weight]
+      properties:
+        label:
+          type: string
+          description: The instrument's symbol, or "Cash".
+        orderbook_id:
+          type: [string, "null"]
+          description: The position's orderbook id; null for the cash slice.
+        value:
+          type: number
+          description: Market value at the last price (cash itself for the cash slice), SEK with 2 decimals.
+        weight:
+          type: number
+          description: Percent of total equity, 2 decimals. The weights of all slices sum to exactly 100 (the rounding remainder goes to the largest slice); all 0 when total equity is 0.
+
+    PortfolioAnalytics:
+      type: object
+      description: |
+        Risk-adjusted performance of the signed-in user. Computed from the daily series (the last equity snapshot of
+        each UTC day, oldest first) with daily returns r_d = equity_d / equity_(d-1) − 1:
+        - total_return_pct = (total_equity / 100000 − 1) × 100, from the live portfolio and the 100,000 SEK start;
+        - volatility_annualized_pct = stdev(r_d) × √252 × 100 (sample standard deviation, n − 1);
+        - sharpe_ratio = (mean(r_d) − rf / 252) / stdev(r_d) × √252 with rf = RISK_FREE_RATE (default 0.02);
+          null also when stdev(r_d) is 0;
+        - max_drawdown_pct = the largest peak-to-trough decline of the daily equity, as a negative percentage
+          (0 when equity never fell).
+        Volatility, Sharpe and drawdown need at least 5 daily returns (data_points ≥ 5); below that they are null and
+        sufficient_data is false. Percentages and the ratio are rounded half-up to 2 decimals.
+      required: [total_return_pct, volatility_annualized_pct, sharpe_ratio, max_drawdown_pct, sufficient_data, data_points, allocation]
+      properties:
+        total_return_pct:
+          type: number
+          description: "Percent, 2 decimals (1.25 means +1.25%)."
+        volatility_annualized_pct:
+          type: [number, "null"]
+          description: Annualized volatility in percent, 2 decimals; null without sufficient data.
+        sharpe_ratio:
+          type: [number, "null"]
+          description: Annualized Sharpe ratio, 2 decimals; null without sufficient data or when volatility is 0.
+        max_drawdown_pct:
+          type: [number, "null"]
+          description: Largest peak-to-trough decline in percent (≤ 0), 2 decimals; null without sufficient data.
+        sufficient_data:
+          type: boolean
+          description: True when data_points ≥ 5.
+        data_points:
+          type: integer
+          minimum: 0
+          description: Number of daily returns in the daily series (days with a snapshot − 1, never below 0).
+        allocation:
+          type: array
+          items: { $ref: "#/components/schemas/AllocationSlice" }
+          description: Positions by value desc (then orderbook id asc), then the cash slice, which is always present.
 
   responses:
     Unauthenticated:
@@ -1312,5 +1405,83 @@ paths:
                     unrealized_pnl_percent: 9.62
                     day_change_percent: 1.25
                     weight: 100
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+
+  /portfolio/history:
+    get:
+      summary: The signed-in user's equity over time
+      description: |
+        Equity snapshots of the signed-in user in the requested range, oldest first (see HistoryRange for the
+        downsampling). A snapshot is taken after every fill and every SNAPSHOT_INTERVAL (default 1h) for users with
+        at least one order; right after a fill the last point equals GET /portfolio's total_equity.
+      operationId: getPortfolioHistory
+      tags: [Portfolio]
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - name: range
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/HistoryRange" }
+          description: Defaults to 1d.
+      responses:
+        "200":
+          description: The equity history.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EquityHistory" }
+              example:
+                range: 1d
+                points:
+                  - { t: "2026-11-08T09:00:00Z", equity: 100000.00 }
+                  - { t: "2026-11-08T09:41:12Z", equity: 99964.97 }
+        "400":
+          description: range is not one of 1d, 1w, 1m, all.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "range must be one of 1d, 1w, 1m, all", code: VALIDATION_ERROR }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+
+  /portfolio/analytics:
+    get:
+      summary: Risk-adjusted performance and allocation of the signed-in user
+      description: |
+        Total return from the 100,000 SEK start, annualized volatility, Sharpe ratio and maximum drawdown from the
+        daily equity series, and the allocation of total equity across positions and cash (see PortfolioAnalytics).
+      operationId: getPortfolioAnalytics
+      tags: [Portfolio]
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: The analytics.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PortfolioAnalytics" }
+              examples:
+                fresh:
+                  summary: A fresh account
+                  value:
+                    total_return_pct: 0
+                    volatility_annualized_pct: null
+                    sharpe_ratio: null
+                    max_drawdown_pct: null
+                    sufficient_data: false
+                    data_points: 0
+                    allocation:
+                      - { label: Cash, orderbook_id: null, value: 100000.00, weight: 100 }
+                history:
+                  summary: Enough history
+                  value:
+                    total_return_pct: 2.15
+                    volatility_annualized_pct: 14.32
+                    sharpe_ratio: 1.12
+                    max_drawdown_pct: -3.40
+                    sufficient_data: true
+                    data_points: 21
+                    allocation:
+                      - { label: FJRD, orderbook_id: SIM-FJRD, value: 10000.00, weight: 10.00 }
+                      - { label: Cash, orderbook_id: null, value: 89964.97, weight: 90.00 }
         "401":
           $ref: "#/components/responses/Unauthenticated"
