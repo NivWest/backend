@@ -55,23 +55,27 @@ type ErrorResponse struct {
 // ProfileResponse is the public view of a user (api/openapi.yaml#/components/schemas/Profile).
 // Handlers return this instead of models.User so google_id and associations never leak.
 type ProfileResponse struct {
-	ID      uint    `json:"id"`
-	Name    string  `json:"name"`
-	Email   string  `json:"email"`
-	Role    string  `json:"role"`
-	Balance float64 `json:"balance"` // SEK, rounded half-up to 2 decimals
-	IsGuest bool    `json:"is_guest"`
+	ID               uint    `json:"id"`
+	Name             string  `json:"name"`
+	Email            string  `json:"email"`
+	Role             string  `json:"role"`
+	Balance          float64 `json:"balance"` // SEK, rounded half-up to 2 decimals
+	IsGuest          bool    `json:"is_guest"`
+	DisplayName      *string `json:"display_name"`
+	LeaderboardOptIn bool    `json:"leaderboard_opt_in"`
 }
 
 // NewProfileResponse maps a user to its public profile.
 func NewProfileResponse(u *models.User) ProfileResponse {
 	return ProfileResponse{
-		ID:      u.ID,
-		Name:    u.Name,
-		Email:   u.Email,
-		Role:    u.Role,
-		Balance: MoneyFloat(u.Balance),
-		IsGuest: u.Role == RoleGuest,
+		ID:               u.ID,
+		Name:             u.Name,
+		Email:            u.Email,
+		Role:             u.Role,
+		Balance:          MoneyFloat(u.Balance),
+		IsGuest:          u.Role == RoleGuest,
+		DisplayName:      u.DisplayName,
+		LeaderboardOptIn: u.LeaderboardOptIn,
 	}
 }
 

@@ -27,6 +27,7 @@ var files embed.FS
 const (
 	InstrumentBriefVersion = "instrument_brief.v1"
 	InsightsReviewVersion  = "insights_review.v1"
+	KnowledgeAskVersion    = "knowledge_ask.v1"
 )
 
 // InstrumentDataTag delimits the instrument data in the instrument brief prompt.
@@ -107,6 +108,11 @@ func InsightsReview(d InsightsReviewData) (Prompt, error) {
 		return Prompt{}, fmt.Errorf("encode insights data: %w", err)
 	}
 	return render(InsightsReviewVersion, map[string]string{"InsightsJSON": string(raw)})
+}
+
+// KnowledgeAsk renders knowledge_ask.v1 for the user's question.
+func KnowledgeAsk(question string) (Prompt, error) {
+	return render(KnowledgeAskVersion, map[string]string{"Question": question})
 }
 
 func render(version string, data any) (Prompt, error) {

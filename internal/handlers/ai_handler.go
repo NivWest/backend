@@ -16,11 +16,12 @@ import (
 type AIHandler struct {
 	briefs  *services.AIBriefService
 	gateway *services.AIGateway
+	ask     *services.AskService
 	auth    domain.AuthRepository
 }
 
-func NewAIHandler(briefs *services.AIBriefService, gateway *services.AIGateway, auth domain.AuthRepository) *AIHandler {
-	return &AIHandler{briefs: briefs, gateway: gateway, auth: auth}
+func NewAIHandler(briefs *services.AIBriefService, gateway *services.AIGateway, ask *services.AskService, auth domain.AuthRepository) *AIHandler {
+	return &AIHandler{briefs: briefs, gateway: gateway, ask: ask, auth: auth}
 }
 
 func (h *AIHandler) Register(v1 *gin.RouterGroup) {
@@ -28,6 +29,26 @@ func (h *AIHandler) Register(v1 *gin.RouterGroup) {
 	ai.Use(middleware.RequireAuth(h.auth))
 	ai.GET("/instruments/:orderbook_id/brief", h.Brief)
 	ai.GET("/usage", h.Usage)
+	ai.POST("/ask", h.Ask)
+}
+
+// Ask handles POST /ai/ask.
+func (h *AIHandler) Ask(c *gin.Context) {
+	user, ok := currentUserOr401(c)
+	if !ok {
+		return
+	}
+	var req domain.AskRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, domain.ErrorResponse{Error: "invalid request body", Code: domain.CodeValidation})
+		return
+	}
+	resp, err := h.ask.Ask(c.Request.Context(), user.ID, req.Question)
+	if err != nil {
+		writeAIError(c, user.ID, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // Brief handles GET /ai/instruments/{orderbook_id}/brief.

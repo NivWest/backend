@@ -333,7 +333,7 @@ func TestOrderHandler_ListOrders_PagesWithLimitOne(t *testing.T) {
 
 func TestOrderHandler_ListOrders_DefaultLimit(t *testing.T) {
 	var gotLimit int
-	repo := &testutil.OrderRepo{ListByUserFn: func(_ context.Context, userID uint, _ *domain.OrderCursor, limit int) ([]domain.Order, error) {
+	repo := &testutil.OrderRepo{ListByUserFn: func(_ context.Context, userID uint, _ *domain.OrderCursor, limit int, _ ...domain.OrderStatus) ([]domain.Order, error) {
 		gotLimit = limit
 		if userID != 1 {
 			t.Errorf("ListByUser user = %d, want 1", userID)
@@ -360,7 +360,7 @@ func TestOrderHandler_ListOrders_BadRequests(t *testing.T) {
 	for name, query := range queries {
 		t.Run(name, func(t *testing.T) {
 			called := false
-			repo := &testutil.OrderRepo{ListByUserFn: func(context.Context, uint, *domain.OrderCursor, int) ([]domain.Order, error) {
+			repo := &testutil.OrderRepo{ListByUserFn: func(context.Context, uint, *domain.OrderCursor, int, ...domain.OrderStatus) ([]domain.Order, error) {
 				called = true
 				return []domain.Order{}, nil
 			}}
@@ -382,7 +382,7 @@ func TestOrderHandler_ListOrders_BadRequests(t *testing.T) {
 }
 
 func TestOrderHandler_ListOrders_RepositoryFailure(t *testing.T) {
-	repo := &testutil.OrderRepo{ListByUserFn: func(context.Context, uint, *domain.OrderCursor, int) ([]domain.Order, error) {
+	repo := &testutil.OrderRepo{ListByUserFn: func(context.Context, uint, *domain.OrderCursor, int, ...domain.OrderStatus) ([]domain.Order, error) {
 		return nil, errors.New("db down")
 	}}
 	w := getOrders(t, orderEngine(repo, fjrdMarket()), memberSession, "")

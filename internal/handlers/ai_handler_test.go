@@ -22,9 +22,10 @@ var aiNow = time.Date(2026, 11, 8, 9, 30, 0, 0, time.UTC)
 func aiClock() time.Time { return aiNow }
 
 type aiFixture struct {
-	engine *gin.Engine
-	usage  *testutil.AIUsageRepo
-	llm    *testutil.LLM
+	engine    *gin.Engine
+	usage     *testutil.AIUsageRepo
+	llm       *testutil.LLM
+	knowledge *testutil.KnowledgeFake
 }
 
 func newAIFixture(llm *testutil.LLM, budget int64) aiFixture {
@@ -40,7 +41,22 @@ func newAIFixture(llm *testutil.LLM, budget int64) aiFixture {
 		return domain.InstrumentDetails{}, domain.ErrInstrumentNotFound
 	}}
 	briefs := services.NewAIBriefService(gw, market, testutil.NewAIBriefRepo(), aiClock)
-	return aiFixture{engine: newEngine(NewAIHandler(briefs, gw, newAuth())), usage: usage, llm: llm}
+	knowledge := testutil.NewKnowledgeFake()
+	firstSentence := "Slippage is the difference between the expected price of a trade and the price at which the trade is executed."
+	knowledge.AddArticle(domain.Article{
+		Slug:  "slippage",
+		Title: "Slippage: Why Orders Fill Off-Price",
+	}, []domain.Chunk{
+		{
+			ChunkID:      "slippage-what-is-slippage",
+			ArticleSlug:  "slippage",
+			ArticleTitle: "Slippage: Why Orders Fill Off-Price",
+			Heading:      "What is Slippage?",
+			Content:      firstSentence + " In fast-moving markets, orders can drift.",
+		},
+	})
+	ask := services.NewAskService(gw, knowledge)
+	return aiFixture{engine: newEngine(NewAIHandler(briefs, gw, ask, newAuth())), usage: usage, llm: llm, knowledge: knowledge}
 }
 
 func fakeLLM() *testutil.LLM { return &testutil.LLM{GenerateFn: fake.New().Generate} }
@@ -149,14 +165,62 @@ func TestAIUsageHandler(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &u); err != nil {
 				t.Fatal(err)
 			}
-			if u.Date != "2026-11-08" || u.BudgetTokens != domain.DefaultAIDailyTokenBudget || len(u.ByFeature) != 2 ||
-				u.ByFeature[0].Feature != domain.AIFeatureInsightsReview ||
-				u.ByFeature[1].Feature != domain.AIFeatureInstrumentBrief || u.ByFeature[1].Calls != tc.wantCalls {
+			var briefFeature domain.AIFeatureUsage
+			for _, bf := range u.ByFeature {
+				if bf.Feature == domain.AIFeatureInstrumentBrief {
+					briefFeature = bf
+				}
+			}
+			if u.Date != "2026-11-08" || u.BudgetTokens != domain.DefaultAIDailyTokenBudget || len(u.ByFeature) != 3 ||
+				briefFeature.Feature != domain.AIFeatureInstrumentBrief || briefFeature.Calls != tc.wantCalls {
 				t.Fatalf("usage = %s", w.Body.String())
 			}
 			if (tc.wantCalls > 0) != (u.UsedTokens > 0) || u.RemainingTokens != u.BudgetTokens-u.UsedTokens {
 				t.Fatalf("usage tokens = %s", w.Body.String())
 			}
 		})
+	}
+}
+
+func TestAIAskHandler(t *testing.T) {
+	f := newAIFixture(fakeLLM(), 0)
+
+	// Unauthenticated returns 401
+	w := do(t, f.engine, http.MethodPost, "/api/v1/ai/ask", "", map[string]any{"question": "What is slippage?"})
+	expectStatus(t, w, http.StatusUnauthorized)
+
+	// Blank question returns 400
+	w = do(t, f.engine, http.MethodPost, "/api/v1/ai/ask", memberSession, map[string]any{"question": "   "})
+	expectStatus(t, w, http.StatusBadRequest)
+
+	// Known topic returns 200 with citations
+	w = do(t, f.engine, http.MethodPost, "/api/v1/ai/ask", memberSession, map[string]any{"question": "What is slippage?"})
+	expectStatus(t, w, http.StatusOK)
+	var resp domain.AskResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Citations) == 0 {
+		t.Fatalf("expected at least 1 citation, got 0")
+	}
+	if resp.Citations[0].ArticleSlug != "slippage" {
+		t.Errorf("citation slug = %q, want 'slippage'", resp.Citations[0].ArticleSlug)
+	}
+	if resp.Disclaimer != domain.AIDisclaimer {
+		t.Errorf("disclaimer = %q, want %q", resp.Disclaimer, domain.AIDisclaimer)
+	}
+
+	// 0 hits returns 200 with abstain answer and empty citations
+	w = do(t, f.engine, http.MethodPost, "/api/v1/ai/ask", memberSession, map[string]any{"question": "zxqv qqqq"})
+	expectStatus(t, w, http.StatusOK)
+	var abstain domain.AskResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &abstain); err != nil {
+		t.Fatalf("decode abstain: %v", err)
+	}
+	if abstain.Answer != services.AbstainAnswer {
+		t.Errorf("answer = %q, want %q", abstain.Answer, services.AbstainAnswer)
+	}
+	if len(abstain.Citations) != 0 {
+		t.Errorf("citations = %v, want empty", abstain.Citations)
 	}
 }

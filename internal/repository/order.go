@@ -95,24 +95,15 @@ func (r *orderRepo) Execute(ctx context.Context, p domain.ExecuteOrderParams) (*
 	)
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// (a) Lock the user row: serializes every order of this user.
-		var user models.User
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Take(&user, p.UserID).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return domain.ErrUserNotFound
-			}
-			return fmt.Errorf("lock user: %w", err)
+		user, err := lockUser(tx, p.UserID)
+		if err != nil {
+			return err
 		}
 
 		// (b) Lock the position for this instrument (it may not exist yet).
-		var positions []models.Position
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("user_id = ? AND stock_id = ?", p.UserID, p.StockID).
-			Limit(1).Find(&positions).Error; err != nil {
-			return fmt.Errorf("lock position: %w", err)
-		}
-		var position *models.Position
-		if len(positions) > 0 {
-			position = &positions[0]
+		position, err := lockPosition(tx, p.UserID, p.StockID)
+		if err != nil {
+			return err
 		}
 
 		// (c) Idempotency: an order with this key already exists -> return it, change nothing.
@@ -132,39 +123,11 @@ func (r *orderRepo) Execute(ctx context.Context, p domain.ExecuteOrderParams) (*
 			return fmt.Errorf("load stock %d: %w", p.StockID, err)
 		}
 
-		// (d) Check sufficiency and move cash and shares. Only a SELL realizes P&L, against the position's
-		// cost basis before the sale (avg_cost is unchanged by selling).
-		balance := user.Balance
-		userUpdates := map[string]any{}
-		var realizedPnLPtr *decimal.Decimal
-		switch p.Side {
-		case domain.OrderSideBuy:
-			if balance.LessThan(p.Total) {
-				return domain.ErrInsufficientFunds
-			}
-			balance = balance.Sub(p.Total)
-			if err := applyBuy(tx, position, p); err != nil {
-				return err
-			}
-		case domain.OrderSideSell:
-			if position == nil || position.Quantity.LessThan(p.Quantity) {
-				return domain.ErrInsufficientShares
-			}
-			balance = balance.Add(p.Total)
-			realized := domain.RealizedPnL(p.Total, position.AvgCost, p.Quantity)
-			realizedPnLPtr = &realized
-			userUpdates["realized_pnl"] = user.RealizedPnL.Add(realized)
-			if err := applySell(tx, position, p.Quantity); err != nil {
-				return err
-			}
-		default:
-			return fmt.Errorf("unsupported order side %q", p.Side)
-		}
-
-		// (e) Only the balance (and, for a SELL, realized_pnl) columns change on the user row, in one UPDATE.
-		userUpdates["balance"] = balance
-		if err := tx.Model(&user).Updates(userUpdates).Error; err != nil {
-			return fmt.Errorf("update balance: %w", err)
+		// (d) Check buying power or available shares (reservations of OPEN orders are held back, story
+		// NW-08), then move cash and shares and update the balance (and realized_pnl) in one UPDATE.
+		realizedPnLPtr, err := settleFill(tx, user, position, p)
+		if err != nil {
+			return err
 		}
 
 		// (f) Record the filled order. Postgres timestamptz keeps microseconds, so truncate now:
@@ -219,6 +182,73 @@ func (r *orderRepo) Execute(ctx context.Context, p domain.ExecuteOrderParams) (*
 		return nil, false, err
 	}
 	return result, created, nil
+}
+
+// lockUser locks the user row (SELECT … FOR UPDATE); a missing user is domain.ErrUserNotFound. Every
+// transaction that moves cash, shares or reservations takes this lock first, then the position, then the order.
+func lockUser(tx *gorm.DB, userID uint) (*models.User, error) {
+	var user models.User
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Take(&user, userID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrUserNotFound
+		}
+		return nil, fmt.Errorf("lock user: %w", err)
+	}
+	return &user, nil
+}
+
+// lockPosition locks the user's position in stockID; nil (no error) when there is none.
+func lockPosition(tx *gorm.DB, userID, stockID uint) (*models.Position, error) {
+	var positions []models.Position
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("user_id = ? AND stock_id = ?", userID, stockID).
+		Limit(1).Find(&positions).Error; err != nil {
+		return nil, fmt.Errorf("lock position: %w", err)
+	}
+	if len(positions) == 0 {
+		return nil, nil
+	}
+	return &positions[0], nil
+}
+
+// settleFill moves the cash and shares of a priced fill on the locked user and position. Reservations are
+// held back: a BUY needs balance − reserved_cash >= Total (ErrInsufficientFunds), a SELL needs
+// quantity − reserved_quantity >= Quantity (ErrInsufficientShares). A pending order's own reservation must be
+// released before. Only a SELL realizes P&L, against the position's cost basis before the sale (avg_cost is
+// unchanged by selling). Only balance (and, for a SELL, realized_pnl) change on the user row, in one UPDATE.
+func settleFill(tx *gorm.DB, user *models.User, position *models.Position, p domain.ExecuteOrderParams) (*decimal.Decimal, error) {
+	balance := user.Balance
+	userUpdates := map[string]any{}
+	var realizedPnLPtr *decimal.Decimal
+	switch p.Side {
+	case domain.OrderSideBuy:
+		if balance.Sub(user.ReservedCash).LessThan(p.Total) {
+			return nil, domain.ErrInsufficientFunds
+		}
+		balance = balance.Sub(p.Total)
+		if err := applyBuy(tx, position, p); err != nil {
+			return nil, err
+		}
+	case domain.OrderSideSell:
+		if position == nil || position.Quantity.Sub(position.ReservedQuantity).LessThan(p.Quantity) {
+			return nil, domain.ErrInsufficientShares
+		}
+		balance = balance.Add(p.Total)
+		realized := domain.RealizedPnL(p.Total, position.AvgCost, p.Quantity)
+		realizedPnLPtr = &realized
+		userUpdates["realized_pnl"] = user.RealizedPnL.Add(realized)
+		if err := applySell(tx, position, p.Quantity); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("unsupported order side %q", p.Side)
+	}
+
+	userUpdates["balance"] = balance
+	if err := tx.Model(user).Updates(userUpdates).Error; err != nil {
+		return nil, fmt.Errorf("update balance: %w", err)
+	}
+	return realizedPnLPtr, nil
 }
 
 // applyBuy adds the bought shares to the (locked) position, creating it when missing. The new
@@ -284,21 +314,24 @@ func toDomainOrder(o *models.Order, s *models.Stock) *domain.Order {
 		filledAt = &t
 	}
 	return &domain.Order{
-		ID:          o.ID,
-		OrderbookID: s.OrderbookID,
-		Symbol:      s.Symbol,
-		Name:        s.Name,
-		Side:        domain.OrderSide(o.Side),
-		Type:        domain.OrderType(o.Type),
-		Status:      domain.OrderStatus(o.Status),
-		Quantity:    o.Quantity,
-		FillPrice:   o.FillPrice,
-		Commission:  o.Commission,
-		Total:       o.Total,
-		Note:        o.Note,
-		RealizedPnL: o.RealizedPnL,
-		CreatedAt:   o.CreatedAt.UTC(),
-		FilledAt:    filledAt,
+		ID:           o.ID,
+		OrderbookID:  s.OrderbookID,
+		Symbol:       s.Symbol,
+		Name:         s.Name,
+		Side:         domain.OrderSide(o.Side),
+		Type:         domain.OrderType(o.Type),
+		Status:       domain.OrderStatus(o.Status),
+		Quantity:     o.Quantity,
+		LimitPrice:   nullDecimal(o.LimitPrice),
+		StopPrice:    nullDecimal(o.StopPrice),
+		FillPrice:    o.FillPrice,
+		Commission:   o.Commission,
+		Total:        o.Total,
+		Note:         o.Note,
+		RealizedPnL:  o.RealizedPnL,
+		RejectReason: o.RejectReason,
+		CreatedAt:    o.CreatedAt.UTC(),
+		FilledAt:     filledAt,
 	}
 }
 
@@ -336,4 +369,21 @@ func (r *orderRepo) UpdateNote(ctx context.Context, userID, orderID uint, note s
 	}
 	order.Note = note
 	return toDomainOrder(&order, &order.Stock), nil
+}
+
+// nullDecimal maps a nullable numeric column to a pointer (nil for NULL).
+func nullDecimal(d decimal.NullDecimal) *decimal.Decimal {
+	if !d.Valid {
+		return nil
+	}
+	v := d.Decimal
+	return &v
+}
+
+// toNullDecimal is the inverse of nullDecimal.
+func toNullDecimal(d *decimal.Decimal) decimal.NullDecimal {
+	if d == nil {
+		return decimal.NullDecimal{}
+	}
+	return decimal.NullDecimal{Decimal: *d, Valid: true}
 }

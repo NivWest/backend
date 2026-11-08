@@ -31,8 +31,22 @@ func Migrate(db *gorm.DB) error {
 		&models.AIInstrumentBrief{},
 		&models.EquitySnapshot{},
 		&models.AIInsightReview{},
+		&models.KBArticle{},
+		&models.KBChunk{},
+		&models.VaultAccount{},
+		&models.VaultTransaction{},
+		&models.LeaderboardEntry{},
 	); err != nil {
 		return fmt.Errorf("auto migrate: %w", err)
+	}
+
+	if err := migrateKBChunksSearch(db); err != nil {
+		return err
+	}
+
+	// Case-insensitive unique index for display_name (story NW-13).
+	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_display_name_lower ON users (lower(display_name)) WHERE display_name IS NOT NULL`).Error; err != nil {
+		return fmt.Errorf("create idx_users_display_name_lower: %w", err)
 	}
 
 	// AutoMigrate retypes columns whose type differs (users.balance and positions.* move from
@@ -45,6 +59,12 @@ func Migrate(db *gorm.DB) error {
 
 	if err := backfillAvgCost(db); err != nil {
 		return err
+	}
+
+	// The matching engine (story NW-08) reads every OPEN order each cycle; a partial index keeps that scan
+	// proportional to the open orders, not to the whole order log.
+	if err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_open ON orders (stock_id, id) WHERE status = 'OPEN'`).Error; err != nil {
+		return fmt.Errorf("orders open index: %w", err)
 	}
 
 	return nil
@@ -97,6 +117,24 @@ func dedupeWatchlistItems(db *gorm.DB) error {
 func backfillAvgCost(db *gorm.DB) error {
 	if err := db.Exec(`UPDATE positions SET avg_cost = avg_price WHERE avg_cost = 0`).Error; err != nil {
 		return fmt.Errorf("backfill positions.avg_cost: %w", err)
+	}
+	return nil
+}
+
+// migrateKBChunksSearch creates the generated tsvector column and GIN index for full-text search (story NW-15).
+// AutoMigrate cannot express generated columns or GIN indexes. Idempotent.
+func migrateKBChunksSearch(db *gorm.DB) error {
+	if db.Dialector.Name() != "postgres" {
+		return nil
+	}
+	stmt := `ALTER TABLE kb_chunks ADD COLUMN IF NOT EXISTS search tsvector GENERATED ALWAYS AS (
+		to_tsvector('english', coalesce(article_title, '') || ' ' || coalesce(heading, '') || ' ' || coalesce(content, ''))
+	) STORED`
+	if err := db.Exec(stmt).Error; err != nil {
+		return fmt.Errorf("kb_chunks.search tsvector: %w", err)
+	}
+	if err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_kb_chunks_search ON kb_chunks USING gin(search)`).Error; err != nil {
+		return fmt.Errorf("idx_kb_chunks_search gin index: %w", err)
 	}
 	return nil
 }

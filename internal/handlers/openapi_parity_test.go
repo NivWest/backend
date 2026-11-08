@@ -76,24 +76,32 @@ func fullApp() *app.App {
 	auth := testutil.NewAuthRepo()
 	provider := &testutil.MarketProvider{}
 	gateway := services.NewAIGateway(fake.New(), testutil.NewAIUsageRepo(), 0, time.Second, nil, nil)
+	knowledge := testutil.NewKnowledgeFake()
 	return &app.App{
-		HealthHandler:    handlers.NewHealthHandler(domain.Features{GuestAuth: true, SimControl: true}, config.MarketProviderSimulated, config.LLMProviderFake),
-		OpenAPIHandler:   handlers.NewOpenAPIHandler(api.OpenAPISpec),
-		UserHandler:      handlers.NewUserHandler(services.NewUserService(users), auth),
-		MarketHandler:    handlers.NewMarketHandler(services.NewMarketService(provider)),
+		HealthHandler:  handlers.NewHealthHandler(domain.Features{GuestAuth: true, SimControl: true}, config.MarketProviderSimulated, config.LLMProviderFake),
+		OpenAPIHandler: handlers.NewOpenAPIHandler(api.OpenAPISpec),
+		UserHandler:    handlers.NewUserHandler(services.NewUserService(users), auth),
+		MarketHandler:  handlers.NewMarketHandler(services.NewMarketService(provider)),
+		MarketStreamHandler: handlers.NewMarketStreamHandler(
+			services.NewQuoteHub(provider, services.QuoteHubOptions{}), handlers.StreamConfig{},
+		),
 		AuthHandler:      handlers.NewAuthHandler(services.NewAuthService(users, auth, cfg), cfg),
 		PortfolioHandler: handlers.NewPortfolioHandler(services.NewPortfolioService(&testutil.PortfolioRepo{}, provider, users), auth),
 		OrderHandler:     handlers.NewOrderHandler(services.NewOrderService(&testutil.OrderRepo{}, provider), auth),
 		WatchlistHandler: handlers.NewWatchlistHandler(services.NewWatchlistService(testutil.NewWatchlistRepo(), provider), auth),
-		AIHandler: handlers.NewAIHandler(
-			services.NewAIBriefService(gateway, provider, testutil.NewAIBriefRepo(), nil), gateway, auth),
 		AnalyticsHandler: handlers.NewAnalyticsHandler(services.NewAnalyticsService(&testutil.SnapshotRepo{},
 			services.NewPortfolioService(&testutil.PortfolioRepo{}, provider, users), 0.02, nil), auth),
 		InsightsHandler: handlers.NewInsightsHandler(services.NewInsightsService(
 			services.NewPortfolioService(&testutil.PortfolioRepo{}, provider, users),
 			&testutil.OrderRepo{}, testutil.NewInsightsReviewRepo(), gateway, nil, nil), auth),
+		VaultHandler: handlers.NewVaultHandler(services.NewVaultService(testutil.NewVaultRepo(users), users, 0.051, nil), auth),
+		LeaderboardHandler: handlers.NewLeaderboardHandler(services.NewLeaderboardService(testutil.NewLeaderboardRepo(), users,
+			services.NewAnalyticsService(&testutil.SnapshotRepo{}, services.NewPortfolioService(&testutil.PortfolioRepo{}, provider, users), 0.02, nil)), auth),
 		SimHandler: handlers.NewSimHandler(&testutil.SimControl{}),
-		AuthRepo:   auth,
+		AIHandler: handlers.NewAIHandler(
+			services.NewAIBriefService(gateway, provider, testutil.NewAIBriefRepo(), nil), gateway, services.NewAskService(gateway, knowledge), auth),
+		LearnHandler: handlers.NewLearnHandler(services.NewKnowledgeService(knowledge)),
+		AuthRepo:     auth,
 	}
 }
 
@@ -173,10 +181,11 @@ func TestOpenAPIRouteParity(t *testing.T) {
 		}
 	})
 
-	t.Run("the parity check itself sees the core NW-01…06 routes", func(t *testing.T) {
+	t.Run("the parity check itself sees the core NW-01…09 routes", func(t *testing.T) {
 		for _, op := range []string{
 			"POST /auth/guest", "GET /market/instruments", "GET /orders", "POST /orders",
 			"GET /portfolio", "GET /watchlists/{id}", "PUT /sim/instruments/{orderbook_id}/price", "GET /openapi.yaml",
+			"GET /market/stream",
 		} {
 			if !mounted[op] || !documented[op] {
 				t.Errorf("%s: mounted=%t documented=%t, want both", op, mounted[op], documented[op])

@@ -18,11 +18,22 @@ import (
 const Model = "fake"
 
 // script answers one feature's request.
-type script func(req domain.LLMRequest) (string, error)
+type script func(req domain.LLMRequest) (string, []domain.LLMCitation, error)
+
+func runInstrumentBrief(req domain.LLMRequest) (string, []domain.LLMCitation, error) {
+	out, err := instrumentBrief(req)
+	return out, nil, err
+}
+
+func runInsightsReview(req domain.LLMRequest) (string, []domain.LLMCitation, error) {
+	out, err := insightsReview(req)
+	return out, nil, err
+}
 
 var scripts = map[domain.AIFeature]script{
-	domain.AIFeatureInstrumentBrief: instrumentBrief,
-	domain.AIFeatureInsightsReview:  insightsReview,
+	domain.AIFeatureInstrumentBrief: runInstrumentBrief,
+	domain.AIFeatureInsightsReview:  runInsightsReview,
+	domain.AIFeatureKnowledgeAsk:    knowledgeAsk,
 }
 
 // LLM is the fake domain.LLM.
@@ -42,12 +53,13 @@ func (LLM) Generate(ctx context.Context, req domain.LLMRequest) (domain.LLMRespo
 	if !ok {
 		return domain.LLMResponse{}, fmt.Errorf("%w: the fake provider has no script for feature %q", domain.ErrAIUnavailable, req.Feature)
 	}
-	out, err := run(req)
+	out, citations, err := run(req)
 	if err != nil {
 		return domain.LLMResponse{}, fmt.Errorf("%w: fake %s: %w", domain.ErrAIUnavailable, req.Feature, err)
 	}
 	return domain.LLMResponse{
 		Content:    out,
+		Citations:  citations,
 		StopReason: domain.LLMStopEndTurn,
 		Usage:      domain.LLMUsage{Input: ceilQuarter(len(Prompt(req))), Output: ceilQuarter(len(out))},
 		Model:      Model,
@@ -66,10 +78,13 @@ func (f LLM) Stream(ctx context.Context, req domain.LLMRequest, onEvent func(dom
 	return resp, nil
 }
 
-// Prompt is the text the fake counts input tokens on: the system prompt and every message text, joined with "\n".
+// Prompt is the text the fake counts input tokens on: the system prompt, documents, and every message text, joined with "\n".
 func Prompt(req domain.LLMRequest) string {
-	parts := make([]string, 0, len(req.Messages)+1)
+	parts := make([]string, 0, len(req.Messages)+len(req.Documents)+1)
 	parts = append(parts, req.System)
+	for _, doc := range req.Documents {
+		parts = append(parts, doc.Title, doc.Content)
+	}
 	for _, m := range req.Messages {
 		parts = append(parts, m.Text)
 	}

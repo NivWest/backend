@@ -67,6 +67,13 @@ type LLMMessage struct {
 	ToolResults []LLMToolResult
 }
 
+// LLMDocument is a document content block sent to the model for native citations (story NW-15).
+type LLMDocument struct {
+	Title     string
+	Content   string
+	Citations bool
+}
+
 // LLMRequest is one model call.
 type LLMRequest struct {
 	// Feature and PromptVersion identify the caller in the usage ledger (e.g. instrument_brief, instrument_brief.v1).
@@ -74,9 +81,10 @@ type LLMRequest struct {
 	PromptVersion string
 	// System is the stable instructions; adapters put it first and mark it cacheable. Never put
 	// per-request data in it, or prompt caching stops working.
-	System   string
-	Messages []LLMMessage
-	Tools    []LLMTool
+	System    string
+	Messages  []LLMMessage
+	Tools     []LLMTool
+	Documents []LLMDocument
 	// JSONSchema, when set, constrains the answer to JSON matching it (structured output). Content is then
 	// the JSON document.
 	JSONSchema map[string]any
@@ -107,11 +115,21 @@ type LLMUsage struct {
 // Total is every token the call processed; the daily budget counts this.
 func (u LLMUsage) Total() int64 { return u.Input + u.Output + u.CacheRead + u.CacheWrite }
 
+// LLMCitation represents a native citation returned by the model from a document block (story NW-15).
+type LLMCitation struct {
+	DocumentIndex  int
+	DocumentTitle  string
+	CitedText      string
+	StartCharIndex int
+	EndCharIndex   int
+}
+
 // LLMResponse is the result of one call.
 type LLMResponse struct {
 	// Content is the concatenated text of the answer (the JSON document with LLMRequest.JSONSchema).
 	Content    string
 	ToolCalls  []LLMToolCall
+	Citations  []LLMCitation
 	StopReason LLMStopReason
 	Usage      LLMUsage
 	// Model is the model that produced the answer: the fallback model when FallbackModel is set.
