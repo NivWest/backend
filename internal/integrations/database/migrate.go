@@ -30,6 +30,7 @@ func Migrate(db *gorm.DB) error {
 		&models.AIUsage{},
 		&models.AIInstrumentBrief{},
 		&models.EquitySnapshot{},
+		&models.AIInsightReview{},
 	); err != nil {
 		return fmt.Errorf("auto migrate: %w", err)
 	}

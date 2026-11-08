@@ -98,7 +98,7 @@ type HealthResponse struct {
 type GuestRepository interface {
 	// DeleteExpiredGuests hard-deletes (Unscoped) every user with Role == RoleGuest that was created
 	// before cutoff and has no session with expires_at >= cutoff, together with its dependent rows:
-	// sessions, positions, transactions, orders, equity snapshots, watchlist items, watchlists, AI usage rows and user_favorites.
+	// sessions, positions, transactions, orders, equity snapshots, watchlist items, watchlists, AI usage rows, AI insight reviews and user_favorites.
 	// It runs in one transaction and returns the number of users deleted.
 	DeleteExpiredGuests(ctx context.Context, cutoff time.Time) (int64, error)
 }
